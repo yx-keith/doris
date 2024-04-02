@@ -179,6 +179,7 @@ public class Analyzer {
     private final List<RuntimeFilter> assignedRuntimeFilters = new ArrayList<>();
 
     private boolean isReAnalyze = false;
+    private TableRef currentTableRef = new TableRef();
 
     public void setIsSubquery() {
         isSubquery = true;
@@ -252,6 +253,14 @@ public class Analyzer {
 
     public long getAutoBroadcastJoinThreshold() {
         return globalState.autoBroadcastJoinThreshold;
+    }
+
+    public TableRef getCurrentTableRef() {
+        return currentTableRef;
+    }
+
+    public void setCurrentTableRef(TableRef currentTableRef) {
+        this.currentTableRef = currentTableRef;
     }
 
     private static class InferPredicateState {

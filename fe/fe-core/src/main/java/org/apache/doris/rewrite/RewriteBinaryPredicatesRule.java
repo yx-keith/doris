@@ -19,18 +19,25 @@ package org.apache.doris.rewrite;
 
 import org.apache.doris.analysis.Analyzer;
 import org.apache.doris.analysis.BinaryPredicate;
-import org.apache.doris.analysis.BinaryPredicate.Operator;
 import org.apache.doris.analysis.BoolLiteral;
 import org.apache.doris.analysis.CastExpr;
 import org.apache.doris.analysis.DecimalLiteral;
+import org.apache.doris.analysis.DateLiteral;
 import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.IntLiteral;
 import org.apache.doris.analysis.LiteralExpr;
 import org.apache.doris.analysis.SlotRef;
+import org.apache.doris.analysis.StringLiteral;
+import org.apache.doris.analysis.TableRef;
+import org.apache.doris.analysis.TypeDef;
+import org.apache.doris.analysis.BinaryPredicate.Operator;
 import org.apache.doris.catalog.PrimitiveType;
+import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.qe.ConnectContext;
+
+import java.util.List;
 
 /**
  * Rewrite binary predicate.
@@ -125,6 +132,20 @@ public class RewriteBinaryPredicatesRule implements ExprRewriteRule {
         BinaryPredicate.Operator op = ((BinaryPredicate) expr).getOp();
         Expr expr0 = expr.getChild(0);
         Expr expr1 = expr.getChild(1);
+
+        TableRef tableRef = analyzer.getCurrentTableRef();
+        String currentCatalog = tableRef.getName().getCtl();
+        if (!"internal".equalsIgnoreCase(currentCatalog)) {
+            if (expr0 instanceof SlotRef && ((SlotRef) expr0).getDesc().getType().isDateType() && expr1 instanceof DateLiteral) {
+                CastExpr leftExpr = new CastExpr(ScalarType.createType("TEXT"), expr0);
+                leftExpr.setTargetTypeDef(TypeDef.create(PrimitiveType.STRING));
+                leftExpr.setImplicit(false);
+                DateLiteral rightLiteral = (DateLiteral) expr1;
+                replaceChildren(expr, leftExpr, rightLiteral);
+                return expr;
+            }
+        }
+
         if (expr0 instanceof CastExpr && (expr0.getType() == Type.DECIMALV2 || expr0.getType().isDecimalV3())
                 && expr0.getChild(0) instanceof SlotRef
                 && expr0.getChild(0).getType().getResultType() == Type.BIGINT
@@ -134,5 +155,13 @@ public class RewriteBinaryPredicatesRule implements ExprRewriteRule {
                     expr0.getChild(0).getType(), (DecimalLiteral) expr1, op);
         }
         return expr;
+    }
+
+    private void replaceChildren(Expr expr, CastExpr left, DateLiteral right) {
+        List<Expr> children = expr.getChildren();
+        children.clear();
+        StringLiteral rightLiteral = new StringLiteral(right.convertToString(PrimitiveType.DATEV2));
+        children.add(0, left);
+        children.add(1, rightLiteral);
     }
 }

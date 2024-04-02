@@ -1844,6 +1844,7 @@ public class SelectStmt extends QueryStmt {
         Preconditions.checkState(isAnalyzed());
         rewriteSelectList(rewriter);
         for (TableRef ref : fromClause) {
+            analyzer.setCurrentTableRef(ref);
             ref.rewriteExprs(rewriter, analyzer);
         }
         // Also equal exprs in the statements of subqueries.

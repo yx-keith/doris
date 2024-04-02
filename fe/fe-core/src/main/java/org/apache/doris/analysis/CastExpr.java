@@ -183,6 +183,10 @@ public class CastExpr extends Expr {
         return targetTypeDef;
     }
 
+    public void setTargetTypeDef(TypeDef targetTypeDef) {
+        this.targetTypeDef = targetTypeDef;
+    }
+
     public static void initBuiltins(FunctionSet functionSet) {
         for (Type fromType : Type.getTrivialTypes()) {
             if (fromType.isNull()) {
