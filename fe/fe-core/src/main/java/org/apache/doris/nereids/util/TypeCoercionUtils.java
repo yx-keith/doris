@@ -39,6 +39,7 @@ import org.apache.doris.nereids.trees.expressions.InPredicate;
 import org.apache.doris.nereids.trees.expressions.IntegralDivide;
 import org.apache.doris.nereids.trees.expressions.Mod;
 import org.apache.doris.nereids.trees.expressions.Multiply;
+import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.SubqueryExpr;
 import org.apache.doris.nereids.trees.expressions.Subtract;
 import org.apache.doris.nereids.trees.expressions.TimestampArithmetic;
@@ -687,6 +688,13 @@ public class TypeCoercionUtils {
             return comparisonPredicate.withChildren(left, right);
         }
 
+        //此处增加隐式转换规则
+        if (left instanceof SlotReference && right instanceof VarcharLiteral) {
+            left = castDateToVarchar((SlotReference) left);
+        } else if (right instanceof SlotReference && left instanceof VarcharLiteral) {
+            right = castDateToVarchar((SlotReference) right);
+        }
+
         // process string literal with numeric
         comparisonPredicate = TypeCoercionUtils
                 .processCharacterLiteralInBinaryOperator(comparisonPredicate, left, right);
@@ -700,6 +708,19 @@ public class TypeCoercionUtils {
             right = castIfNotSameType(right, commonType.get());
         }
         return comparisonPredicate.withChildren(left, right);
+    }
+
+    /**
+     * cast date to varchar
+     */
+    public static Expression castDateToVarchar(SlotReference convertNode) {
+        String currentCalalog = convertNode.getQualifier().get(0);
+        if (!"internal".equalsIgnoreCase(currentCalalog)) {
+            if (convertNode.getDataType().isDateLikeType()) {
+                return new Cast(convertNode, StringType.INSTANCE, true);
+            }
+        }
+        return convertNode;
     }
 
     /**
