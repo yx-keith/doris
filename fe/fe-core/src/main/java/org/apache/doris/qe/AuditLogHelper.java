@@ -323,7 +323,8 @@ public class AuditLogHelper {
                     CreateTableCommand tmp = (CreateTableCommand) logicalPlan;
                     if (tmp.isCtasCommand()) {  //create table as select, so regard it as insert
                         List<String> tableNameParts = tmp.getCreateTableInfo().getTableNameParts();
-                        TableIf targetTableIf = RelationUtil.getTable(tableNameParts, ctx.getEnv());
+                        TableIf targetTableIf = RelationUtil.getTable(
+                                RelationUtil.getQualifierName(ctx, tableNameParts), ctx.getEnv());
                         ret.add(targetTableIf.getNameWithFullQualifiers());
                     }
                 } else if (logicalPlan instanceof DeleteFromCommand) {
@@ -352,10 +353,8 @@ public class AuditLogHelper {
                     insertStmt = ((UpdateStmt) parsedStmt).getInsertStmt();
                 }
                 if (null != insertStmt) {
-                    List<Table> tables = insertStmt.getTargetTableList();
-                    for (Table table : tables) {
-                        ret.add(table.getNameWithFullQualifiers());
-                    }
+                    Table table = insertStmt.getTargetTable();
+                    ret.add(table.getNameWithFullQualifiers());
                 }
             }
         } catch (Exception e) {
