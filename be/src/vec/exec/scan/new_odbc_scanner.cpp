@@ -235,6 +235,9 @@ Status NewOdbcScanner::_get_block_impl(RuntimeState* state, Block* block, bool* 
 }
 
 Status NewOdbcScanner::close(RuntimeState* state) {
+    if (!_try_close()) {
+        return Status::OK();
+    }
     RETURN_IF_ERROR(VScanner::close(state));
     return Status::OK();
 }
