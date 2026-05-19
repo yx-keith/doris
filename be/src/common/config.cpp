@@ -650,6 +650,11 @@ DEFINE_mInt32(memory_maintenance_sleep_time_ms, "100");
 // After minor gc, no minor gc during sleep, but full gc is possible.
 DEFINE_mInt32(memory_gc_sleep_time_ms, "500");
 
+// Small memory task threshold in bytes for memory tracker limiter
+// Tasks with memory consumption below this threshold will not be cancelled during memory pressure
+// Default is 32MB (33554432 bytes)
+DEFINE_mInt64(mem_tracker_limit_small_memory_task_bytes, "33554432");
+
 // Sleep time in milliseconds between memtbale flush mgr refresh iterations
 DEFINE_mInt64(memtable_mem_tracker_refresh_interval_ms, "5");
 
