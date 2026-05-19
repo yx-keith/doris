@@ -18,6 +18,7 @@
 package org.apache.doris.common.profile;
 
 import org.apache.doris.common.util.RuntimeProfile;
+import org.apache.doris.common.util.SafeStringBuilder;
 import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.StmtExecutor;
@@ -290,7 +291,7 @@ public class SummaryProfile {
         }
     }
 
-    public void prettyPrint(StringBuilder builder) {
+    public void prettyPrint(SafeStringBuilder builder) {
         summaryProfile.prettyPrint(builder, "");
         executionSummaryProfile.prettyPrint(builder, "");
     }

@@ -17,8 +17,10 @@
 
 package org.apache.doris.common.profile;
 
+import org.apache.doris.common.util.DebugPointUtil;
 import org.apache.doris.common.util.ProfileManager;
 import org.apache.doris.common.util.RuntimeProfile;
+import org.apache.doris.common.util.SafeStringBuilder;
 import org.apache.doris.planner.Planner;
 
 import com.google.common.collect.Lists;
@@ -54,6 +56,7 @@ public class Profile {
     private static final Logger LOG = LogManager.getLogger(Profile.class);
     private static final int MergedProfileLevel = 1;
     private final String name;
+    private final String PROFILE_SIZE_LIMIT = "Profile.profileSizeLimit";
     private final boolean isPipelineX;
     private SummaryProfile summaryProfile;
     private List<ExecutionProfile> executionProfiles = Lists.newArrayList();
@@ -118,14 +121,26 @@ public class Profile {
     }
 
     public String getProfileByLevel() {
-        StringBuilder builder = new StringBuilder();
+        SafeStringBuilder builder = new SafeStringBuilder();
+        if (DebugPointUtil.isEnable(PROFILE_SIZE_LIMIT)) {
+            DebugPointUtil.DebugPoint debugPoint = DebugPointUtil.getDebugPoint(PROFILE_SIZE_LIMIT);
+            if (debugPoint != null) {
+                int maxProfileSize = debugPoint.param("profileSizeLimit", 0);
+                builder = new SafeStringBuilder(maxProfileSize);
+                LOG.info("DebugPoint:Profile.profileSizeLimit, MAX_PROFILE_SIZE = {}", maxProfileSize); 
+            }
+        }
+
         // add summary to builder
         summaryProfile.prettyPrint(builder);
         waitProfileCompleteIfNeeded();
-        getChangedSessionVars(builder);
+        if (!builder.isTruncated()) {
+            getChangedSessionVars(builder);
+        }
         // Only generate merged profile for select, insert into select.
         // Not support broker load now.
-        if (this.profileLevel == MergedProfileLevel && this.executionProfiles.size() == 1) {
+        if (!builder.isTruncated()
+                && this.profileLevel == MergedProfileLevel && this.executionProfiles.size() == 1) {
             try {
                 builder.append("\n MergedProfile \n");
                 this.executionProfiles.get(0).getAggregatedFragmentsProfile(planNodeMap).prettyPrint(builder, "     ");
@@ -134,14 +149,19 @@ public class Profile {
                 builder.append("build merged simple profile failed");
             }
         }
-        try {
-            for (ExecutionProfile executionProfile : executionProfiles) {
-                builder.append("\n");
-                executionProfile.getRoot().prettyPrint(builder, "");
+        if (!builder.isTruncated()) {
+            try {
+                for (ExecutionProfile executionProfile : executionProfiles) {
+                    if (builder.isTruncated()) {
+                        break;
+                    }
+                    builder.append("\n");
+                    executionProfile.getRoot().prettyPrint(builder, "");
+                }
+            } catch (Throwable aggProfileException) {
+                LOG.warn("build profile failed", aggProfileException);
+                builder.append("build  profile failed");
             }
-        } catch (Throwable aggProfileException) {
-            LOG.warn("build profile failed", aggProfileException);
-            builder.append("build  profile failed");
         }
         return builder.toString();
     }
@@ -185,9 +205,9 @@ public class Profile {
         this.changedSessionVarCache = changedSessionVar;
     }
 
-    private void getChangedSessionVars(StringBuilder builder) {
+    private void getChangedSessionVars(SafeStringBuilder builder) {
         if (builder == null) {
-            builder = new StringBuilder();
+            builder = new SafeStringBuilder();  
         }
 
         builder.append("\nChanged Session Variables:\n");

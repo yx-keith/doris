@@ -403,7 +403,7 @@ public class RuntimeProfile {
         return detailed;
     }
 
-    private void printActimeCounter(StringBuilder builder, boolean isPipelineX) {
+    private void printActimeCounter(SafeStringBuilder builder, boolean isPipelineX) {
         if (!isPipelineX) {
             Counter counter = this.counterMap.get("TotalTime");
             Preconditions.checkState(counter != null);
@@ -435,11 +435,11 @@ public class RuntimeProfile {
     // 2. Info Strings
     // 3. Counters
     // 4. Children
-    public void prettyPrint(StringBuilder builder, String prefix) {
+    public void prettyPrint(SafeStringBuilder builder, String prefix) {
         prettyPrint(builder, prefix, false);
     }
 
-    public void prettyPrint(StringBuilder builder, String prefix, boolean isPipelineX) {
+    public void prettyPrint(SafeStringBuilder builder, String prefix, boolean isPipelineX) {
         // 1. profile name
         builder.append(prefix).append(name).append(":");
         // total time
@@ -449,6 +449,9 @@ public class RuntimeProfile {
 
         // plan node info
         printPlanNodeInfo(prefix + "   ", builder);
+        if (builder.isTruncated()) {
+            return;
+        }
 
         // 2. info String
         infoStringsLock.readLock().lock();
@@ -466,14 +469,23 @@ public class RuntimeProfile {
         } finally {
             infoStringsLock.readLock().unlock();
         }
+        if (builder.isTruncated()) {
+            return;
+        }
 
         // 3. counters
         printChildCounters(prefix, ROOT_COUNTER, builder);
+        if (builder.isTruncated()) {
+            return;
+        }
 
         // 4. children
         childLock.readLock().lock();
         try {
             for (int i = 0; i < childList.size(); i++) {
+                if (builder.isTruncated()) {
+                    return;
+                }
                 Pair<RuntimeProfile, Boolean> pair = childList.get(i);
                 boolean indent = pair.second;
                 RuntimeProfile profile = pair.first;
@@ -484,7 +496,7 @@ public class RuntimeProfile {
         }
     }
 
-    private void printPlanNodeInfo(String prefix, StringBuilder builder) {
+    private void printPlanNodeInfo(String prefix, SafeStringBuilder builder) {
         if (planNodeInfos.isEmpty()) {
             return;
         }
@@ -511,7 +523,7 @@ public class RuntimeProfile {
     }
 
     public String toString() {
-        StringBuilder builder = new StringBuilder();
+        SafeStringBuilder builder = new SafeStringBuilder();
         prettyPrint(builder, "", isPipelineX);
         return builder.toString();
     }
@@ -565,7 +577,7 @@ public class RuntimeProfile {
         }
     }
 
-    private void printChildCounters(String prefix, String counterName, StringBuilder builder) {
+    private void printChildCounters(String prefix, String counterName, SafeStringBuilder builder) {
         Set<String> childCounterSet = childCounterMap.get(counterName);
         if (childCounterSet == null) {
             return;
@@ -574,6 +586,9 @@ public class RuntimeProfile {
         counterLock.readLock().lock();
         try {
             for (String childCounterName : childCounterSet) {
+                if (builder.isTruncated()) {
+                    return;
+                }
                 Counter counter = this.counterMap.get(childCounterName);
                 Preconditions.checkState(counter != null);
                 builder.append(prefix).append("   - ").append(childCounterName).append(": ")
