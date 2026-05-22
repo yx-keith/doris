@@ -21,6 +21,7 @@ import org.apache.doris.analysis.ColumnDef.DefaultValue;
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.common.DdlException;
 
 import com.google.common.collect.Lists;
 import org.junit.Assert;
@@ -38,7 +39,7 @@ public class AddColumnsClauseTest {
     }
 
     @Test
-    public void testNormal() throws AnalysisException {
+    public void testNormal() throws AnalysisException, DdlException {
         List<ColumnDef> columns = Lists.newArrayList();
         ColumnDef definition = new ColumnDef("col1", new TypeDef(ScalarType.createType(PrimitiveType.INT)),
                 true, null, false, new DefaultValue(true, "0"), "");
@@ -69,7 +70,7 @@ public class AddColumnsClauseTest {
     }
 
     @Test(expected = AnalysisException.class)
-    public void testNoDefault() throws AnalysisException {
+    public void testNoDefault() throws AnalysisException, DdlException {
         List<ColumnDef> columns = Lists.newArrayList();
         ColumnDef definition = new ColumnDef("col1", new TypeDef(ScalarType.createType(PrimitiveType.INT)));
         columns.add(definition);
@@ -82,7 +83,7 @@ public class AddColumnsClauseTest {
     }
 
     @Test(expected = AnalysisException.class)
-    public void testNoColumn() throws AnalysisException {
+    public void testNoColumn() throws AnalysisException, DdlException {
         AddColumnsClause clause = new AddColumnsClause(null, null, null);
 
         clause.analyze(analyzer);
