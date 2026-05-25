@@ -219,6 +219,7 @@ protected:
         auto tablet = std::make_shared<Tablet>(*s_engine, tablet_meta, _data_dir, "test_str");
         // tablet->key
         rowset_writer_context->tablet = tablet;
+        rowset_writer_context->enable_segcompaction = true;
     }
 
     void create_and_init_rowset_reader(Rowset* rowset, RowsetReaderContext& context,
