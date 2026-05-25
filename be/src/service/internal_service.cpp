@@ -1737,14 +1737,16 @@ void PInternalServiceImpl::hand_shake(google::protobuf::RpcController* controlle
     response->mutable_status()->set_status_code(0);
 }
 
-constexpr char HttpProtocol[] = "http://";
+constexpr char HttpProtocolPrefix[] = "http://";
+constexpr char HttpsProtocolPrefix[] = "https://";
 constexpr char DownloadApiPath[] = "/api/_tablet/_download?token=";
 constexpr char FileParam[] = "&file=";
 
 std::string construct_url(const std::string& host_port, const std::string& token,
                           const std::string& path) {
-    return fmt::format("{}{}{}{}{}{}", HttpProtocol, host_port, DownloadApiPath, token, FileParam,
-                       path);
+    return fmt::format("{}{}{}{}{}{}",
+                       config::enable_https ? HttpsProtocolPrefix : HttpProtocolPrefix, host_port,
+                       DownloadApiPath, token, FileParam, path);
 }
 
 std::string construct_file_path(const std::string& tablet_path, const std::string& rowset_id,
