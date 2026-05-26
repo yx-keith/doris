@@ -24,6 +24,7 @@ import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.KillStmt;
 import org.apache.doris.analysis.QueryStmt;
 import org.apache.doris.analysis.RedirectStatus;
+import org.apache.doris.analysis.SelectStmt;
 import org.apache.doris.analysis.SetStmt;
 import org.apache.doris.analysis.ShowAuthorStmt;
 import org.apache.doris.analysis.ShowStmt;
@@ -33,6 +34,7 @@ import org.apache.doris.analysis.UseStmt;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.PrimitiveType;
+import org.apache.doris.catalog.Type;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.jmockit.Deencapsulation;
 import org.apache.doris.common.profile.Profile;
@@ -898,5 +900,38 @@ public class StmtExecutorTest {
 
         StmtExecutor executor = new StmtExecutor(mockCtx, stmt, false);
         executor.sendBinaryResultRow(resultSet);
+    }
+
+    @Test
+    public void testSendStmtPrepareOkWithResultMetadata() throws IOException {
+        ConnectContext mockCtx = Mockito.mock(ConnectContext.class);
+        MysqlChannel channel = Mockito.mock(MysqlChannel.class);
+        QueryState queryState = new QueryState();
+        Mockito.when(mockCtx.getConnectType()).thenReturn(ConnectType.MYSQL);
+        Mockito.when(mockCtx.getMysqlChannel()).thenReturn(channel);
+        Mockito.when(mockCtx.getState()).thenReturn(queryState);
+        Mockito.when(channel.getSerializer()).thenReturn(MysqlSerializer.newInstance());
+        Mockito.when(channel.clientDeprecatedEOF()).thenReturn(false);
+
+        SelectStmt selectStmt = Mockito.mock(SelectStmt.class);
+        Expr expr = Mockito.mock(Expr.class);
+        Mockito.when(selectStmt.getColLabels()).thenReturn(Lists.newArrayList("1"));
+        Mockito.when(selectStmt.getResultExprs()).thenReturn(Lists.newArrayList(expr));
+        Mockito.when(expr.getType()).thenReturn(Type.INT);
+
+        List<byte[]> packets = Lists.newArrayList();
+        Mockito.doAnswer(invocation -> {
+            ByteBuffer buffer = invocation.getArgument(0);
+            packets.add(buffer.array());
+            return null;
+        }).when(channel).sendOnePacket(Mockito.any(ByteBuffer.class));
+
+        StmtExecutor executor = new StmtExecutor(mockCtx, new OriginStatement("", 0), false);
+        Deencapsulation.setField(executor, "parsedStmt", selectStmt);
+        executor.sendStmtPrepareOK(1, Lists.newArrayList());
+
+        Assertions.assertEquals(3, packets.size());
+        Assertions.assertEquals(1, packets.get(0)[5]);
+        Assertions.assertEquals(0, packets.get(0)[6]);
     }
 }
