@@ -113,6 +113,7 @@ import org.apache.doris.nereids.types.coercion.FractionalType;
 import org.apache.doris.nereids.types.coercion.IntegralType;
 import org.apache.doris.nereids.types.coercion.NumericType;
 import org.apache.doris.nereids.types.coercion.PrimitiveType;
+import org.apache.doris.qe.SessionVariable;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
@@ -1488,6 +1489,17 @@ public class TypeCoercionUtils {
             }
             return Optional.of(leftType);
         }
+        // bigint vs string: use decimal to avoid precision loss
+        if ((leftType instanceof BigIntType && rightType.isStringLikeType())
+                || (rightType instanceof BigIntType && leftType.isStringLikeType())) {
+            if (SessionVariable.getEnableDecimal256()) {
+                return Optional.of(DecimalV3Type.createDecimalV3Type(DecimalV3Type.MAX_DECIMAL256_PRECISION,
+                        SessionVariable.getDecimalOverFlowScale()));
+            }
+            return Optional.of(DecimalV3Type.createDecimalV3Type(DecimalV3Type.MAX_DECIMAL128_PRECISION,
+                    SessionVariable.getDecimalOverFlowScale()));
+        }
+
         return Optional.of(DoubleType.INSTANCE);
     }
 
