@@ -90,7 +90,7 @@ public class RuntimeProfileTest {
         profile.update(tprofileTree);
         Assert.assertEquals(profile.getInfoString("key"), "value4");
 
-        StringBuilder builder = new StringBuilder();
+        SafeStringBuilder builder = new SafeStringBuilder();
         profile.prettyPrint(builder, "");
         Assert.assertEquals(builder.toString(),
                 "profileName:\n   - key: value4\n   - key3: value3\n");
@@ -168,7 +168,7 @@ public class RuntimeProfileTest {
         tnodeASon.name = "ASON";
 
         profile.update(tprofileTree);
-        StringBuilder builder = new StringBuilder();
+        SafeStringBuilder builder = new SafeStringBuilder();
         profile.computeTimeInProfile();
         profile.prettyPrint(builder, "");
     }

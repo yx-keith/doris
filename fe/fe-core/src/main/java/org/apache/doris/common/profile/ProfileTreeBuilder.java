@@ -21,6 +21,7 @@ import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.Counter;
 import org.apache.doris.common.util.RuntimeProfile;
+import org.apache.doris.common.util.SafeStringBuilder;
 import org.apache.doris.thrift.TUnit;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -267,7 +268,7 @@ public class ProfileTreeBuilder {
             // profiles are received
             // at least once.
             // Issue: https://github.com/apache/doris/issues/10095
-            StringBuilder sb = new StringBuilder();
+            SafeStringBuilder sb = new SafeStringBuilder();
             instanceProfile.prettyPrint(sb, "");
             if (LOG.isDebugEnabled()) {
                 LOG.debug(
