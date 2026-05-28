@@ -519,6 +519,9 @@ Status VMetaScanner::_build_partition_values_metadata_request(
 
 Status VMetaScanner::close(RuntimeState* state) {
     VLOG_CRITICAL << "VMetaScanner::close";
+    if (!_try_close()) {
+        return Status::OK();
+    }
     RETURN_IF_ERROR(VScanner::close(state));
     return Status::OK();
 }

@@ -1205,7 +1205,7 @@ Status VFileScanner::_init_expr_ctxes() {
 }
 
 Status VFileScanner::close(RuntimeState* state) {
-    if (_is_closed) {
+    if (!_try_close()) {
         return Status::OK();
     }
 

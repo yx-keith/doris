@@ -260,17 +260,17 @@ Status VScanner::try_append_late_arrival_runtime_filter() {
 }
 
 Status VScanner::close(RuntimeState* state) {
-    if (_is_closed) {
-        return Status::OK();
-    }
-
     if (_parent) {
         COUNTER_UPDATE(_parent->_scanner_wait_worker_timer, _scanner_wait_worker_timer);
     } else {
         COUNTER_UPDATE(_local_state->_scanner_wait_worker_timer, _scanner_wait_worker_timer);
     }
-    _is_closed = true;
     return Status::OK();
+}
+
+bool VScanner::_try_close() {
+    bool expected = false;
+    return _is_closed.compare_exchange_strong(expected, true);
 }
 
 void VScanner::_collect_profile_before_close() {
