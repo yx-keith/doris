@@ -23,6 +23,7 @@ import groovy.transform.stc.FromString
 import groovy.util.logging.Slf4j
 import org.apache.doris.regression.suite.SuiteContext
 import org.apache.http.client.methods.HttpGet
+import org.apache.http.client.methods.HttpPut
 import org.apache.http.entity.StringEntity
 import org.apache.http.entity.ContentType
 import org.apache.http.impl.client.HttpClients
@@ -83,7 +84,7 @@ class HttpCliAction implements SuiteAction {
     }
 
     void op(Closure<String> opSupplier) {
-        this.op = bodySupplier.call()
+        this.op = opSupplier.call()
     }
 
     void op(String op) {
@@ -114,6 +115,28 @@ class HttpCliAction implements SuiteAction {
                     }
 
                     client.execute(httpGet).withCloseable { resp ->
+                        resp.withCloseable {
+                            String respJson = EntityUtils.toString(resp.getEntity())
+                            def respCode = resp.getStatusLine().getStatusCode()
+                            if (printResponse) {
+                                log.info("respCode: ${respCode}, respJson: ${respJson}")
+                            }
+                            return new ActionResult(respCode, respJson)
+                        }
+                    }
+                } else if (op == "put") {
+                    HttpPut httpPut = new HttpPut(uri)
+                    for (final def header in headers.entrySet()) {
+                        httpPut.setHeader(header.getKey(), header.getValue())
+                    }
+                    if (body != null) {
+                        StringEntity requestEntity = new StringEntity(
+                                body,
+                                ContentType.APPLICATION_JSON);
+                        httpPut.setEntity(requestEntity)
+                    }
+
+                    client.execute(httpPut).withCloseable { resp ->
                         resp.withCloseable {
                             String respJson = EntityUtils.toString(resp.getEntity())
                             def respCode = resp.getStatusLine().getStatusCode()
