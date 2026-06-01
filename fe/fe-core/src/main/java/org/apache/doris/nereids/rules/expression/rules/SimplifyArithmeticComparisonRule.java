@@ -38,6 +38,7 @@ import org.apache.doris.nereids.trees.expressions.functions.scalar.WeeksAdd;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.WeeksSub;
 import org.apache.doris.nereids.trees.expressions.literal.IntegerLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
+import org.apache.doris.nereids.trees.expressions.literal.NullLiteral;
 import org.apache.doris.nereids.util.TypeCoercionUtils;
 
 import com.google.common.collect.ImmutableList;
@@ -129,11 +130,34 @@ public class SimplifyArithmeticComparisonRule implements ExpressionPatternRuleFa
         Expression newChild = oppositeOperator.getConstructor(Expression.class, Expression.class)
                 .newInstance(right, leftLiteral);
 
+        // When the opposite operator is a date/time function and the right operand is a
+        // literal, eagerly fold the rearranged constant to detect overflow that would
+        // make the rewrite unsafe.  For example, rewriting
+        //   days_sub(i, 1) <= '9999-12-31'  =>  i <= days_add('9999-12-31', 1)
+        // overflows DATE max; days_add returns NullLiteral, which would silently turn
+        // the predicate into `i <= NULL` and change the query semantics (#61761).
+        // Numeric arithmetic (Add/Subtract/Divide/Multiply) is excluded because FE
+        // folding may fail due to type-precision mismatches that do NOT indicate an
+        // unsafe rewrite — the expression is still valid at runtime.
+        if (isDateTimeFunction(oppositeOperator) && right instanceof Literal) {
+            Expression folded = FoldConstantRule.evaluate(newChild, context);
+            if (folded instanceof NullLiteral) {
+                throw new RuntimeException(String.format(
+                    "Rearranged constant %s overflows; keeping original comparison", newChild));
+            }
+        }
+
         if (left instanceof Divide && leftLiteral.compareTo(new IntegerLiteral(0)) < 0) {
             // Multiplying by a negative number will change the operator.
             return Arrays.asList(newChild, leftExpr);
         }
         return Arrays.asList(leftExpr, newChild);
+    }
+
+    private static boolean isDateTimeFunction(Class<? extends Expression> clazz) {
+        return clazz != Add.class && clazz != Subtract.class
+                && clazz != Multiply.class && clazz != Divide.class
+                && REARRANGEMENT_MAP.containsValue(clazz);
     }
 
     // Ensure that the second child must be Literal, such as
