@@ -44,12 +44,14 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.servlet.view.RedirectView;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
 import java.util.Collections;
+import java.util.stream.Collectors;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
@@ -107,24 +109,6 @@ public class RestBaseController extends BaseController {
         redirectView.setContentType("text/html;charset=utf-8");
         redirectView.setStatusCode(org.springframework.http.HttpStatus.TEMPORARY_REDIRECT);
         return redirectView;
-    }
-
-    public RedirectView redirectToMasterOrException(HttpServletRequest request, HttpServletResponse response)
-                    throws Exception {
-        Env env = Env.getCurrentEnv();
-        if (env.isMaster()) {
-            return null;
-        }
-        env.checkReadyOrThrow();
-        return redirectTo(request, new TNetworkAddress(env.getMasterHost(), env.getMasterHttpPort()));
-    }
-
-    public Object redirectToMaster(HttpServletRequest request, HttpServletResponse response) {
-        try {
-            return redirectToMasterOrException(request, response);
-        } catch (Exception e) {
-            return ResponseEntityBuilder.okWithCommonError(e.getMessage());
-        }
     }
 
     public void getFile(HttpServletRequest request, HttpServletResponse response, Object obj, String fileName)
@@ -197,6 +181,23 @@ public class RestBaseController extends BaseController {
         RedirectView redirectView = new RedirectView(newUrl);
         redirectView.setStatusCode(HttpStatus.TEMPORARY_REDIRECT);
         return redirectView;
+    }
+
+    private String getRequestBody(HttpServletRequest request) throws IOException {
+        BufferedReader reader = request.getReader();
+        return reader.lines().collect(Collectors.joining(System.lineSeparator()));
+    }
+
+    /**
+     * forward follower request to master
+     */
+    public Object forwardToMaster(HttpServletRequest request) {
+        try {
+            return forwardToMaster(request, (Object) getRequestBody(request));
+        } catch (Exception e) {
+            LOG.warn(e);
+            return ResponseEntityBuilder.okWithCommonError(e.getMessage());
+        }
     }
 
     public boolean checkForwardToMaster(HttpServletRequest request) {

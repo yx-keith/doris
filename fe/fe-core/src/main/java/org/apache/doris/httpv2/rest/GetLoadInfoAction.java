@@ -56,6 +56,12 @@ public class GetLoadInfoAction extends RestBaseController {
             @PathVariable(value = DB_KEY) final String dbName,
             HttpServletRequest request, HttpServletResponse response) {
         executeCheckPassword(request, response);
+        if (needRedirect(request.getScheme())) {
+            return redirectToHttps(request);
+        }
+        if (checkForwardToMaster(request)) {
+            return forwardToMaster(request);
+        }
 
         String fullDbName = getFullDbName(dbName);
 
@@ -66,11 +72,6 @@ public class GetLoadInfoAction extends RestBaseController {
         }
         if (Strings.isNullOrEmpty(info.label)) {
             return new RestBaseResult("No label selected");
-        }
-
-        Object redirectView = redirectToMaster(request, response);
-        if (redirectView != null) {
-            return redirectView;
         }
 
         try {

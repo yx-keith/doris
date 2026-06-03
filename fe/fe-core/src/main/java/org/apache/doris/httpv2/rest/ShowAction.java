@@ -46,7 +46,6 @@ import org.apache.logging.log4j.Logger;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.view.RedirectView;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -119,7 +118,7 @@ public class ShowAction extends RestBaseController {
         // forward to master if necessary
         if (!Env.getCurrentEnv().isMaster() && isForward) {
             try {
-                RedirectView redirectView = redirectToMasterOrException(request, response);
+                Object redirectView = forwardToMaster(request);
                 Preconditions.checkNotNull(redirectView);
                 return redirectView;
             } catch (Exception e) {
