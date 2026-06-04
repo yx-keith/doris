@@ -4291,6 +4291,14 @@ public class SessionVariable implements Serializable, Writable {
                 || connectContext.getSessionVariable().enablePipelineXEngine;
     }
 
+    public static int getDecimalOverFlowScale() {
+        ConnectContext connectContext = ConnectContext.get();
+        if (connectContext == null) {
+            return VariableMgr.getDefaultSessionVariable().decimalOverflowScale;
+        }
+        return connectContext.getSessionVariable().decimalOverflowScale;
+    }
+
     public static boolean enablePipelineEngineX() {
         ConnectContext connectContext = ConnectContext.get();
         if (connectContext == null) {
