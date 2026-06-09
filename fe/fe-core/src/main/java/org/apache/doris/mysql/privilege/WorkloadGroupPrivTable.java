@@ -17,16 +17,42 @@
 
 package org.apache.doris.mysql.privilege;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
+
 public class WorkloadGroupPrivTable extends PrivTable {
+    private static final Logger LOG = LogManager.getLogger(WorkloadGroupPrivTable.class);
 
     public void getPrivs(String workloadGroupName, PrivBitSet savedPrivs) {
         // need check all entries, because may have 2 entries match workloadGroupName,
         // For example, if the workloadGroupName is g1, there are two entry `%` and `g1` compound requirements
-        for (PrivEntry entry : getEntries()) {
-            WorkloadGroupPrivEntry workloadGroupPrivEntry = (WorkloadGroupPrivEntry) entry;
-            if (workloadGroupPrivEntry.getWorkloadGroupPattern().match(workloadGroupName)) {
-                savedPrivs.or(workloadGroupPrivEntry.getPrivSet());
+        List<PrivEntry> entries = getEntries();
+        if (Objects.isNull(entries) || entries.isEmpty()) {
+            return;
+        }
+        Function<PrivEntry, WorkloadGroupPrivEntry> matchFunc = entry -> {
+            try {
+                WorkloadGroupPrivEntry workloadGroupPrivEntry = (WorkloadGroupPrivEntry) entry;
+
+                // check workloadGroup
+                if (!workloadGroupPrivEntry.getWorkloadGroupPattern().match(workloadGroupName)) {
+                    return null;
+                }
+                return workloadGroupPrivEntry;
+            } catch (Exception e) {
+                LOG.warn("Privilege check failed when invoking getPrivs, workloadGroupName:{}, entry:{}",
+                        workloadGroupName, entry, e);
+                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
             }
+        };
+        WorkloadGroupPrivEntry matchedEntry = doPrivMatch(entries, matchFunc);
+        // Finally set privilege
+        if (Objects.nonNull(matchedEntry)) {
+            savedPrivs.or(matchedEntry.getPrivSet());
         }
     }
 }

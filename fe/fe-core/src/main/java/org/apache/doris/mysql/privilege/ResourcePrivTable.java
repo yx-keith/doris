@@ -20,6 +20,10 @@ package org.apache.doris.mysql.privilege;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
+
 /*
  * ResourcePrivTable saves all resources privs
  */
@@ -29,12 +33,29 @@ public class ResourcePrivTable extends PrivTable {
     public void getPrivs(String resourceName, PrivBitSet savedPrivs) {
         // need check all entries, because may have 2 entries match resourceName,
         // For example, if the resourceName is g1, there are two entry `%` and `g1` compound requirements
-        for (PrivEntry entry : getEntries()) {
-            ResourcePrivEntry resourcePrivEntry = (ResourcePrivEntry) entry;
-            // check resource
-            if (resourcePrivEntry.getResourcePattern().match(resourceName)) {
-                savedPrivs.or(resourcePrivEntry.getPrivSet());
+        List<PrivEntry> entries = getEntries();
+        if (Objects.isNull(entries) || entries.isEmpty()) {
+            return;
+        }
+        Function<PrivEntry, ResourcePrivEntry> matchFunc = entry -> {
+            try {
+                ResourcePrivEntry resourcePrivEntry = (ResourcePrivEntry) entry;
+
+                // check resource
+                if (!resourcePrivEntry.getResourcePattern().match(resourceName)) {
+                    return null;
+                }
+                return resourcePrivEntry;
+            } catch (Exception e) {
+                LOG.warn("Privilege check failed when invoking getPrivs, resourceName:{}, entry:{}",
+                        resourceName, entry, e);
+                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
             }
+        };
+        ResourcePrivEntry matchedEntry = doPrivMatch(entries, matchFunc);
+        // Finally set privilege
+        if (Objects.nonNull(matchedEntry)) {
+            savedPrivs.or(matchedEntry.getPrivSet());
         }
     }
 }

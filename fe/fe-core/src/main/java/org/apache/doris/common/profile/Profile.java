@@ -54,9 +54,9 @@ import java.util.Map;
  */
 public class Profile {
     private static final Logger LOG = LogManager.getLogger(Profile.class);
+    private static final String PROFILE_SIZE_LIMIT = "Profile.profileSizeLimit";
     private static final int MergedProfileLevel = 1;
     private final String name;
-    private final String PROFILE_SIZE_LIMIT = "Profile.profileSizeLimit";
     private final boolean isPipelineX;
     private SummaryProfile summaryProfile;
     private List<ExecutionProfile> executionProfiles = Lists.newArrayList();
@@ -127,7 +127,7 @@ public class Profile {
             if (debugPoint != null) {
                 int maxProfileSize = debugPoint.param("profileSizeLimit", 0);
                 builder = new SafeStringBuilder(maxProfileSize);
-                LOG.info("DebugPoint:Profile.profileSizeLimit, MAX_PROFILE_SIZE = {}", maxProfileSize); 
+                LOG.info("DebugPoint:Profile.profileSizeLimit, MAX_PROFILE_SIZE = {}", maxProfileSize);
             }
         }
 
@@ -207,7 +207,7 @@ public class Profile {
 
     private void getChangedSessionVars(SafeStringBuilder builder) {
         if (builder == null) {
-            builder = new SafeStringBuilder();  
+            builder = new SafeStringBuilder();
         }
 
         builder.append("\nChanged Session Variables:\n");

@@ -2970,4 +2970,50 @@ public class Config extends ConfigBase {
         "Whether to enable rollback after session variables set failed"})
     public static boolean enable_rollback_after_bulk_session_variables_set_failed = false;
 
+    //==========================================================================
+    //                    begin of auth check config
+    //==========================================================================
+
+    @ConfField(mutable = true, masterOnly = false, description = {"自动开启并行权限校验的阈值",
+        "Threshold to auto-enable parallel permission checks"})
+    public static int parallel_auth_check_threshold = 20 * 10000; //20W
+
+    @ConfField(mutable = true, masterOnly = false, description = {"权限校验并行任务每批次处理权限策略数",
+        "Number of privilege policies processed per batch in parallel authorization check mode"})
+    public static int parallel_auth_batch_size = 50000; //5W
+
+    @ConfField(mutable = true, masterOnly = false, description = {"并行验证权限的超时时间",
+        "Timeout for parallel permission checks"})
+    public static int parallel_auth_check_timeout = 90000; //ms
+
+    @ConfField(mutable = false, masterOnly = false, description = {"并行权限校验的线程数",
+        "Thread count for parallel permission checks"})
+    public static int parallel_auth_thread_num = -1;
+
+    @ConfField(mutable = false, masterOnly = false, description = {"并行权限校验的异步线程队列大小",
+        "Parallel permission check async thread queue size"})
+    public static int parallel_auth_queue_size = 40960;
+
+    //==========================================================================
+    //                   end of  parallel auth check config
+    //==========================================================================
+
+    //==========================================================================
+    //                   begin common of async pool config
+    //==========================================================================
+    @ConfField(mutable = false, masterOnly = false, description = {"通用业务异步执行线程数",
+        "Thread count for common business async executor"})
+    public static int common_business_async_thread_num = -1;
+
+    @ConfField(mutable = false, masterOnly = false, description = {"通用业务异步线程队列大小",
+        "Common business async thread queue size"})
+    public static int common_business_async_queue_size = 81920;
+
+    @ConfField(mutable = true, masterOnly = false, description = {"通用业务异步任务提交超时时间",
+        "Timeout for parallel common business async task"})
+    public static int common_business_async_timeout = 90000; //ms
+    //==========================================================================
+    //                   end common of async pool config
+    //==========================================================================
+
 }
