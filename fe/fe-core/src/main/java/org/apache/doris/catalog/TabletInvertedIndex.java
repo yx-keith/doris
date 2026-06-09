@@ -704,17 +704,16 @@ public class TabletInvertedIndex {
     }
 
     public List<Long> getTabletIdsByBackendId(long backendId) {
-        List<Long> tabletIds = Lists.newArrayList();
         long stamp = readLock();
         try {
             Map<Long, Replica> replicaMetaWithBackend = backingReplicaMetaTable.row(backendId);
             if (replicaMetaWithBackend != null) {
-                tabletIds.addAll(replicaMetaWithBackend.keySet());
+                return Lists.newArrayList(replicaMetaWithBackend.keySet());
             }
+            return Lists.newArrayList();
         } finally {
             readUnlock(stamp);
         }
-        return tabletIds;
     }
 
     public List<Pair<Long, Long>> getTabletSizeByBackendIdAndStorageMedium(long backendId,

@@ -464,7 +464,7 @@ public class SystemInfoService {
         long minBeTabletsNum = Long.MAX_VALUE;
         int minIndex = -1;
         for (int i = 0; i < beIds.size(); ++i) {
-            long tabletsNum = Env.getCurrentInvertedIndex().getTabletIdsByBackendId(beIds.get(i)).size();
+            int tabletsNum = Env.getCurrentInvertedIndex().getTabletNumByBackendId(beIds.get(i));
             if (tabletsNum < minBeTabletsNum) {
                 minBeTabletsNum = tabletsNum;
                 minIndex = i;
