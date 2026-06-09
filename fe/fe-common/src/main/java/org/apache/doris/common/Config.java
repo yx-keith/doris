@@ -109,7 +109,7 @@ public class Config extends ConfigBase {
     @ConfField(description = {"FE 审计日志文件的最大数量。超过这个数量后，最老的日志文件会被删除",
             "The maximum number of FE audit log files. "
                     + "After exceeding this number, the oldest log file will be deleted"})
-    public static int audit_log_roll_num = 30;
+    public static int audit_log_roll_num = 20;
     @ConfField(description = {"FE 审计日志文件的种类", "The type of FE audit log file"},
             options = {"slow_query", "query", "load", "stream_load"})
     public static String[] audit_log_modules = {"slow_query", "query", "load", "stream_load"};
