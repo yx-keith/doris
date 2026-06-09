@@ -102,6 +102,11 @@ public class AlterUserStmt extends DdlStmt {
     }
 
     @Override
+    public boolean needAuditEncryption() {
+        return true;
+    }
+
+    @Override
     public void analyze(Analyzer analyzer) throws UserException {
         super.analyze(analyzer);
         userDesc.getUserIdent().analyze();
