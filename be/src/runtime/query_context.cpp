@@ -181,7 +181,10 @@ QueryContext::~QueryContext() {
     _execution_dependency.reset();
     _shared_hash_table_controller.reset();
     _shared_scanner_controller.reset();
-    _runtime_predicates.clear();
+    {
+        std::lock_guard<std::shared_mutex> lock(_predicates_mutex);
+        _runtime_predicates.clear();
+    }
     file_scan_range_params_map.clear();
     obj_pool.clear();
 

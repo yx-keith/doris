@@ -171,6 +171,7 @@ public:
     }
 
     vectorized::RuntimePredicate& get_runtime_predicate(int source_node_id) {
+        std::shared_lock lock(_predicates_mutex);
         DCHECK(_runtime_predicates.contains(source_node_id) || _runtime_predicates.contains(0));
         if (_runtime_predicates.contains(source_node_id)) {
             return _runtime_predicates[source_node_id];
@@ -179,6 +180,7 @@ public:
     }
 
     void init_runtime_predicates(std::vector<int> source_node_ids) {
+        std::lock_guard<std::shared_mutex> lock(_predicates_mutex);
         for (int id : source_node_ids) {
             _runtime_predicates.try_emplace(id);
         }
@@ -358,6 +360,7 @@ private:
 
     std::shared_ptr<vectorized::SharedHashTableController> _shared_hash_table_controller;
     std::shared_ptr<vectorized::SharedScannerController> _shared_scanner_controller;
+    mutable std::shared_mutex _predicates_mutex;
     std::unordered_map<int, vectorized::RuntimePredicate> _runtime_predicates;
 
     WorkloadGroupPtr _workload_group = nullptr;
