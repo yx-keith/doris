@@ -45,7 +45,7 @@ public class RestApiExceptionHandler {
     @ResponseBody
     public Object userExceptionHandler(UserException e) {
         LOG.warn("user exception", e);
-        return ResponseEntityBuilder.ok(e.getMessage());
+        return ResponseEntityBuilder.okWithCommonError(e.getMessage());
     }
 
     @ExceptionHandler(BadRequestException.class)

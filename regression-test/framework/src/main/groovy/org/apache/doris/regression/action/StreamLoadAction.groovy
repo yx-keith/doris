@@ -84,6 +84,10 @@ class StreamLoadAction implements SuiteAction {
         this.table = table.call()
     }
 
+    void setFeAddr(String feHost, int feHttpPort) {
+        this.address = new InetSocketAddress(feHost, feHttpPort)
+    }
+
     void directToBe(String beHost, int beHttpPort) {
         this.address = new InetSocketAddress(beHost, beHttpPort)
         this.directToBe = true
