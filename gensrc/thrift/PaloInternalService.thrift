@@ -493,6 +493,10 @@ struct TQueryOptions {
   219: optional bool enable_segment_limit_pushdown = true
 
   220: optional bool enable_ann_index_result_cache = true
+
+  // Pre-filter column predicates into the ANN candidate bitmap (IDSelector) instead of falling
+  // back to a brute-force distance scan when an ANN TopN query carries a column predicate.
+  221: optional bool enable_ann_topn_predicate_prefilter = true
   // For cloud, to control if the content would be written into file cache
   // In write path, to control if the content would be written into file cache.
   // In read path, read from file cache or remote storage when execute query.
