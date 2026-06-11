@@ -17,7 +17,6 @@
 
 package org.apache.doris.mysql;
 
-import com.google.common.base.Preconditions;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -78,8 +77,6 @@ public class ProxyProtocolHandler {
     public static ProxyProtocolResult handle(BytesChannel channel) throws IOException {
         // First read 1 byte to see if it is V1 or V2
         ByteBuffer buffer = ByteBuffer.allocate(1);
-        //make sure only read 1 byte
-        Preconditions.checkArgument(buffer.remaining() == 1, buffer.remaining());
         int readLen = channel.readWithTimeout(buffer, 10);
         if (readLen == -1) {
             throw new IOException("Remote peer closed the channel, ignore.");
