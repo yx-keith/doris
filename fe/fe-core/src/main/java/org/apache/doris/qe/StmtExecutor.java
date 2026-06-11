@@ -84,6 +84,7 @@ import org.apache.doris.analysis.UpdateStmt;
 import org.apache.doris.analysis.UseStmt;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
+import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.FsBroker;
 import org.apache.doris.catalog.OlapTable;
@@ -130,7 +131,6 @@ import org.apache.doris.mysql.FieldInfo;
 import org.apache.doris.mysql.MysqlChannel;
 import org.apache.doris.mysql.MysqlCommand;
 import org.apache.doris.mysql.MysqlEofPacket;
-import org.apache.doris.mysql.MysqlOkPacket;
 import org.apache.doris.mysql.MysqlSerializer;
 import org.apache.doris.mysql.ProxyMysqlChannel;
 import org.apache.doris.mysql.privilege.PrivPredicate;
@@ -144,6 +144,8 @@ import org.apache.doris.nereids.glue.LogicalPlanAdapter;
 import org.apache.doris.nereids.minidump.MinidumpUtils;
 import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.expressions.Placeholder;
+import org.apache.doris.nereids.trees.expressions.Slot;
+import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.literal.DateTimeV2Literal;
 import org.apache.doris.nereids.trees.plans.commands.Command;
 import org.apache.doris.nereids.trees.plans.commands.CreateTableCommand;
@@ -158,6 +160,7 @@ import org.apache.doris.nereids.trees.plans.commands.insert.InsertOverwriteTable
 import org.apache.doris.nereids.trees.plans.commands.insert.OlapInsertExecutor;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalSqlCache;
+import org.apache.doris.nereids.types.DataType;
 import org.apache.doris.planner.GroupCommitPlanner;
 import org.apache.doris.planner.GroupCommitScanNode;
 import org.apache.doris.planner.OlapScanNode;
@@ -2655,6 +2658,10 @@ public class StmtExecutor {
     }
 
     public void sendStmtPrepareOK(int stmtId, List<String> labels) throws IOException {
+        sendStmtPrepareOK(stmtId, labels, getOutputSlotsForStmtPrepare());
+    }
+
+    public void sendStmtPrepareOK(int stmtId, List<String> labels, List<Slot> output) throws IOException {
         Preconditions.checkState(context.getConnectType() == ConnectType.MYSQL);
         // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_prepare.html#sect_protocol_com_stmt_prepare_response
         serializer.reset();
@@ -2663,13 +2670,19 @@ public class StmtExecutor {
         // statement_id
         serializer.writeInt4(stmtId);
         // num_columns
-        int numColumns = 0;
+        int numColumns = output == null ? 0 : output.size();
         serializer.writeInt2(numColumns);
         // num_params
         int numParams = labels.size();
         serializer.writeInt2(numParams);
         // reserved_1
         serializer.writeInt1(0);
+        if (numParams > 0 || numColumns > 0) {
+            // warning_count
+            serializer.writeInt2(0);
+            // metadata_follows
+            serializer.writeInt1(1);
+        }
         context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
         if (numParams > 0) {
             // send field one by one
@@ -2683,18 +2696,92 @@ public class StmtExecutor {
                 serializer.writeField(colNames.get(i), Type.STRING);
                 context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
             }
-            serializer.reset();
             if (!context.getMysqlChannel().clientDeprecatedEOF()) {
+                serializer.reset();
                 MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
                 eofPacket.writeTo(serializer);
-            } else {
-                MysqlOkPacket okPacket = new MysqlOkPacket(context.getState());
-                okPacket.writeTo(serializer);
+                context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
             }
-            context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
+        }
+        if (numColumns > 0) {
+            for (Slot slot : output) {
+                serializer.reset();
+                if (slot instanceof SlotReference
+                        && ((SlotReference) slot).getColumn().isPresent()
+                        && ((SlotReference) slot).getTable().isPresent()) {
+                    SlotReference slotReference = (SlotReference) slot;
+                    TableIf table = slotReference.getTable().get();
+                    Column column = slotReference.getColumn().get();
+                    DatabaseIf database = table.getDatabase();
+                    String dbName = database == null ? "" : database.getFullName();
+                    serializer.writeField(dbName, table.getName(), column, false);
+                } else {
+                    serializer.writeField(slot.getName(), slot.getDataType().toCatalogDataType());
+                }
+                context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
+            }
+            if (!context.getMysqlChannel().clientDeprecatedEOF()) {
+                serializer.reset();
+                MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
+                eofPacket.writeTo(serializer);
+                context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
+            }
         }
         context.getMysqlChannel().flush();
         context.getState().setNoop();
+    }
+
+    private List<Slot> getOutputSlotsForStmtPrepare() {
+        if (parsedStmt instanceof SelectStmt) {
+            List<String> colLabels = ((SelectStmt) parsedStmt).getColLabels();
+            List<Expr> resultExprs = ((SelectStmt) parsedStmt).getResultExprs();
+            if (colLabels == null || resultExprs == null) {
+                return Lists.newArrayList();
+            }
+            List<Slot> slots = Lists.newArrayListWithCapacity(colLabels.size());
+            for (int i = 0; i < colLabels.size(); i++) {
+                Type type = i < resultExprs.size() ? resultExprs.get(i).getType() : Type.STRING;
+                slots.add(newOutputSlot(colLabels.get(i), type));
+            }
+            return slots;
+        } else if (parsedStmt instanceof LogicalPlanAdapter) {
+            LogicalPlanAdapter logicalPlanAdapter = (LogicalPlanAdapter) parsedStmt;
+            List<FieldInfo> fieldInfos = logicalPlanAdapter.getFieldInfos();
+            if (fieldInfos != null) {
+                List<Expr> resultExprs = logicalPlanAdapter.getResultExprs();
+                List<Slot> slots = Lists.newArrayListWithCapacity(fieldInfos.size());
+                for (int i = 0; i < fieldInfos.size(); i++) {
+                    Type type = resultExprs != null && i < resultExprs.size()
+                            ? resultExprs.get(i).getType() : Type.STRING;
+                    slots.add(newOutputSlot(fieldInfos.get(i).getName(), type));
+                }
+                return slots;
+            }
+            List<String> colLabels = logicalPlanAdapter.getColLabels();
+            List<Expr> resultExprs = logicalPlanAdapter.getResultExprs();
+            if (colLabels != null && resultExprs != null) {
+                List<Slot> slots = Lists.newArrayListWithCapacity(colLabels.size());
+                for (int i = 0; i < colLabels.size(); i++) {
+                    Type type = i < resultExprs.size() ? resultExprs.get(i).getType() : Type.STRING;
+                    slots.add(newOutputSlot(colLabels.get(i), type));
+                }
+                return slots;
+            }
+        } else if (parsedStmt instanceof ShowStmt) {
+            ShowResultSetMetaData metaData = ((ShowStmt) parsedStmt).getMetaData();
+            if (metaData != null) {
+                List<Slot> slots = Lists.newArrayListWithCapacity(metaData.getColumnCount());
+                for (Column column : metaData.getColumns()) {
+                    slots.add(newOutputSlot(column.getName(), column.getType()));
+                }
+                return slots;
+            }
+        }
+        return Lists.newArrayList();
+    }
+
+    private Slot newOutputSlot(String name, Type type) {
+        return new SlotReference(name, DataType.fromCatalogType(type == null ? Type.STRING : type));
     }
 
     private void sendFields(List<String> colNames, List<Type> types) throws IOException {
