@@ -253,6 +253,18 @@ public class MysqlChannel implements BytesChannel {
         return readLen;
     }
 
+    @Override
+    public int readWithTimeout(ByteBuffer dstBuf, long timeoutMs) {
+        try {
+            return Channels.readBlocking(conn.getSourceChannel(), dstBuf, timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (IOException e) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Read channel exception, ignore.", e);
+            }
+            return -1;
+        }
+    }
+
     protected void decryptData(ByteBuffer dstBuf, boolean isHeader) throws SSLException {
         // after decrypt, we get a mysql packet with mysql header.
         if (!isSslMode || isHeader) {
