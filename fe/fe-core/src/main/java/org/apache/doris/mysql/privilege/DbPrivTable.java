@@ -21,6 +21,10 @@ import com.google.common.base.Preconditions;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
+
 /*
  * DbPrivTable saves all database level privs
  */
@@ -33,51 +37,65 @@ public class DbPrivTable extends PrivTable {
      */
 
     public void getPrivs(String ctl, String db, PrivBitSet savedPrivs) {
-        DbPrivEntry matchedEntry = null;
-        for (PrivEntry entry : getEntries()) {
-            DbPrivEntry dbPrivEntry = (DbPrivEntry) entry;
-
-            // check catalog
-            if (!dbPrivEntry.isAnyCtl() && !dbPrivEntry.getCtlPattern().match(ctl)) {
-                continue;
-            }
-
-            // check db
-            // dbPrivEntry.getDbPattern() is always constructed by string as of form: 'xxx_db'
-            if (!dbPrivEntry.isAnyDb() && !dbPrivEntry.getDbPattern().match(db)) {
-                continue;
-            }
-
-            matchedEntry = dbPrivEntry;
-            break;
-        }
-        if (matchedEntry == null) {
+        List<PrivEntry> entries = getEntries();
+        if (Objects.isNull(entries) || entries.isEmpty()) {
             return;
         }
 
-        savedPrivs.or(matchedEntry.getPrivSet());
+        Function<PrivEntry, DbPrivEntry> matchFunc = entry -> {
+            try {
+                DbPrivEntry dbPrivEntry = (DbPrivEntry) entry;
+
+                // check catalog
+                if (!dbPrivEntry.isAnyCtl() && !dbPrivEntry.getCtlPattern().match(ctl)) {
+                    return null;
+                }
+
+                // check db
+                // dbPrivEntry.getDbPattern() is always constructed by string as of form: 'xxx_db'
+                if (!dbPrivEntry.isAnyDb() && !dbPrivEntry.getDbPattern().match(db)) {
+                    return null;
+                }
+
+                return dbPrivEntry;
+            } catch (Exception e) {
+                LOG.warn("Privilege check failed when invoking getPrivs, ctl:{}, db:{}, entry:{}",
+                        ctl, db, entry, e);
+                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
+            }
+        };
+        DbPrivEntry matchedEntry = doPrivMatch(entries, matchFunc);
+        // Finally set privilege
+        if (Objects.nonNull(matchedEntry)) {
+            savedPrivs.or(matchedEntry.getPrivSet());
+        }
     }
 
     public boolean hasPrivsOfCatalog(String ctl) {
-        for (PrivEntry entry : getEntries()) {
-            DbPrivEntry dbPrivEntry = (DbPrivEntry) entry;
-
-            // check catalog
-            Preconditions.checkState(!dbPrivEntry.isAnyCtl());
-            if (dbPrivEntry.getCtlPattern().match(ctl)) {
-                return true;
-            }
+        List<PrivEntry> entries = getEntries();
+        if (Objects.isNull(entries) || entries.isEmpty()) {
+            return false;
         }
-        return false;
+
+        Function<PrivEntry, Boolean> matchFunc =  entry -> {
+            try {
+                DbPrivEntry dbPrivEntry = (DbPrivEntry) entry;
+
+                // check catalog
+                Preconditions.checkState(!dbPrivEntry.isAnyCtl());
+                if (dbPrivEntry.getCtlPattern().match(ctl)) {
+                    return true;
+                }
+                return null;
+            } catch (Exception e) {
+                LOG.warn("Privilege check failed when invoking hasPrivsOfCatalog, ctl:{} entry:{}", ctl,  entry, e);
+                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
+            }
+        };
+
+        Boolean isMatched = doPrivMatch(entries, matchFunc);
+
+        return Objects.nonNull(isMatched) && isMatched;
     }
 
-    public boolean hasClusterPriv(String clusterName) {
-        for (PrivEntry entry : getEntries()) {
-            DbPrivEntry dbPrivEntry = (DbPrivEntry) entry;
-            if (dbPrivEntry.getOrigDb().startsWith(clusterName)) {
-                return true;
-            }
-        }
-        return false;
-    }
 }

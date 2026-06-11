@@ -54,6 +54,7 @@ import java.util.Map;
  */
 public class Profile {
     private static final Logger LOG = LogManager.getLogger(Profile.class);
+    private static final String PROFILE_SIZE_LIMIT = "Profile.profileSizeLimit";
     private static final int MergedProfileLevel = 1;
     private final String name;
     private final boolean isPipelineX;

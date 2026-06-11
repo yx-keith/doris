@@ -111,6 +111,7 @@ import org.apache.doris.analysis.ShowViewStmt;
 import org.apache.doris.analysis.ShowWorkloadGroupsStmt;
 import org.apache.doris.analysis.ShowWorkloadPoliciesStmt;
 import org.apache.doris.analysis.TableName;
+import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.backup.AbstractJob;
 import org.apache.doris.backup.BackupJob;
 import org.apache.doris.backup.Repository;
@@ -160,6 +161,7 @@ import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.PatternMatcher;
 import org.apache.doris.common.PatternMatcherWrapper;
+import org.apache.doris.common.async.CommonAsyncProcessor;
 import org.apache.doris.common.proc.BackendsProcDir;
 import org.apache.doris.common.proc.BuildIndexProcDir;
 import org.apache.doris.common.proc.FrontendsProcNode;
@@ -823,11 +825,12 @@ public class ShowExecutor {
     private void handleShowDb() throws AnalysisException {
         ShowDbStmt showDbStmt = (ShowDbStmt) stmt;
         List<List<String>> rows = Lists.newArrayList();
-        // cluster feature is deprecated.
+
         CatalogIf catalogIf = ctx.getCatalog(showDbStmt.getCatalogName());
         if (catalogIf == null) {
             throw new AnalysisException("No catalog found with name " + showDbStmt.getCatalogName());
         }
+
         List<String> dbNames = catalogIf.getDbNames();
         PatternMatcher matcher = null;
         if (showDbStmt.getPattern() != null) {
@@ -859,32 +862,56 @@ public class ShowExecutor {
 
     // Show table statement.
     private void handleShowTable() throws AnalysisException {
-        ShowTableStmt showTableStmt = (ShowTableStmt) stmt;
+        ShowTableStmt showStmt = (ShowTableStmt) stmt;
         List<List<String>> rows = Lists.newArrayList();
+
+        // 1. Initialize database and pattern matcher
         DatabaseIf<TableIf> db = ctx.getEnv().getCatalogMgr()
-                .getCatalogOrAnalysisException(showTableStmt.getCatalog())
-                .getDbOrAnalysisException(showTableStmt.getDb());
-        PatternMatcher matcher = null;
-        if (showTableStmt.getPattern() != null) {
-            matcher = PatternMatcherWrapper.createMysqlPattern(showTableStmt.getPattern(), isShowTablesCaseSensitive());
+                .getCatalogOrAnalysisException(showStmt.getCatalog())
+                    .getDbOrAnalysisException(showStmt.getDb());
+
+        final PatternMatcher matcher = Objects.isNull(showStmt.getPattern()) ? null :
+                PatternMatcherWrapper.createMysqlPattern(showStmt.getPattern(), isShowTablesCaseSensitive());
+
+        // 2. Parallel filter tables by pattern, type, temporary flag and privilege
+        List<TableIf> allTables = db.getTables();
+        final UserIdentity currentUser = ctx.getCurrentUserIdentity();
+        final boolean skipAuth = ctx.isSkipAuth();
+        List<TableIf> candidateTables;
+
+        try {
+            candidateTables = CommonAsyncProcessor.filter(allTables, tbl -> {
+                // Skip temporary materialized views
+                if (tbl.getName().startsWith(FeConstants.TEMP_MATERIZLIZE_DVIEW_PREFIX)) {
+                    return null;
+                }
+                // Filter by table type
+                if (showStmt.getType() != null && tbl.getType() != showStmt.getType()) {
+                    return null;
+                }
+                // Pattern matching filter
+                if (Objects.nonNull(matcher) && !matcher.match(tbl.getName())) {
+                    return null;
+                }
+                // Privilege check (skip if auth is disabled)
+                if (!skipAuth) {
+                    boolean hasPriv = Env.getCurrentEnv().getAccessManager()
+                            .checkTblPriv(currentUser, showStmt.getCatalog(),
+                                db.getFullName(), tbl.getName(), PrivPredicate.SHOW);
+                    if (!hasPriv) {
+                        return null;
+                    }
+                }
+                return tbl;
+            });
+        } catch (Exception e) {
+            LOG.warn("Failed to execute parallel table filtering for ShowTable", e);
+            throw new AnalysisException("Failed to filter tables in parallel", e);
         }
-        for (TableIf tbl : db.getTables()) {
-            if (tbl.getName().startsWith(FeConstants.TEMP_MATERIZLIZE_DVIEW_PREFIX)) {
-                continue;
-            }
-            if (showTableStmt.getType() != null && tbl.getType() != showTableStmt.getType()) {
-                continue;
-            }
-            if (matcher != null && !matcher.match(tbl.getName())) {
-                continue;
-            }
-            // check tbl privs
-            if (!Env.getCurrentEnv().getAccessManager()
-                    .checkTblPriv(ConnectContext.get(), showTableStmt.getCatalog(), db.getFullName(), tbl.getName(),
-                            PrivPredicate.SHOW)) {
-                continue;
-            }
-            if (showTableStmt.isVerbose()) {
+
+        // 3. Build result rows
+        for (TableIf tbl : candidateTables) {
+            if (showStmt.isVerbose()) {
                 String storageFormat = "NONE";
                 String invertedIndexStorageFormat = "NONE";
                 if (tbl instanceof OlapTable) {
@@ -897,12 +924,10 @@ public class ShowExecutor {
                 rows.add(Lists.newArrayList(tbl.getName()));
             }
         }
-        // sort by table name
-        rows.sort((x, y) -> {
-            return x.get(0).compareTo(y.get(0));
-        });
 
-        resultSet = new ShowResultSet(showTableStmt.getMetaData(), rows);
+        // 4. Sort result by table name
+        rows.sort((x, y) -> x.get(0).compareTo(y.get(0)));
+        resultSet = new ShowResultSet(showStmt.getMetaData(), rows);
     }
 
     public boolean isShowTablesCaseSensitive() {
@@ -916,77 +941,69 @@ public class ShowExecutor {
     private void handleShowTableStatus() throws AnalysisException {
         ShowTableStatusStmt showStmt = (ShowTableStatusStmt) stmt;
         List<List<String>> rows = Lists.newArrayList();
+
+        // 1. Initialize database and pattern matcher
         DatabaseIf<TableIf> db = ctx.getEnv().getCatalogMgr()
                 .getCatalogOrAnalysisException(showStmt.getCatalog())
-                .getDbOrAnalysisException(showStmt.getDb());
-        if (db != null) {
-            PatternMatcher matcher = null;
-            if (showStmt.getPattern() != null) {
-                matcher = PatternMatcherWrapper.createMysqlPattern(showStmt.getPattern(), isShowTablesCaseSensitive());
-            }
-            for (TableIf table : db.getTables()) {
-                if (matcher != null && !matcher.match(table.getName())) {
-                    continue;
-                }
+                    .getDbOrAnalysisException(showStmt.getDb());
 
-                // check tbl privs
-                if (!Env.getCurrentEnv().getAccessManager()
-                        .checkTblPriv(ConnectContext.get(), showStmt.getCatalog(),
-                                db.getFullName(), table.getName(), PrivPredicate.SHOW)) {
-                    continue;
-                }
-                List<String> row = Lists.newArrayList();
-                // Name
-                row.add(table.getName());
-                // Engine
-                row.add(table.getEngine());
-                // version
-                row.add(null);
-                // Row_format
-                row.add(null);
-                // Rows
-                row.add(String.valueOf(table.getCachedRowCount()));
-                // Avg_row_length
-                row.add(String.valueOf(table.getAvgRowLength()));
-                // Data_length
-                row.add(String.valueOf(table.getDataLength()));
-                // Max_data_length
-                row.add(null);
-                // Index_length
-                row.add(null);
-                // Data_free
-                row.add(null);
-                // Auto_increment
-                row.add(null);
-                // Create_time
-                row.add(TimeUtils.longToTimeString(table.getCreateTime() * 1000));
-                // Update_time
-                if (table.getUpdateTime() > 0) {
-                    row.add(TimeUtils.longToTimeString(table.getUpdateTime()));
-                } else {
-                    row.add(null);
-                }
-                // Check_time
-                if (table.getLastCheckTime() > 0) {
-                    row.add(TimeUtils.longToTimeString(table.getLastCheckTime()));
-                } else {
-                    row.add(null);
-                }
-                // Collation
-                row.add("utf-8");
-                // Checksum
-                row.add(null);
-                // Create_options
-                row.add(null);
+        final PatternMatcher matcher = Objects.isNull(showStmt.getPattern()) ? null :
+                PatternMatcherWrapper.createMysqlPattern(showStmt.getPattern(), isShowTablesCaseSensitive());
 
-                row.add(table.getComment());
-                rows.add(row);
-            }
+        // 2. Parallel filter tables by pattern and privilege
+        List<TableIf> allTables = db.getTables();
+        final UserIdentity currentUser = ctx.getCurrentUserIdentity();
+        final boolean skipAuth = ctx.isSkipAuth();
+        List<TableIf> candidateTables;
+
+        try {
+            candidateTables = CommonAsyncProcessor.filter(allTables, tbl -> {
+                // Pattern matching filter
+                if (Objects.nonNull(matcher) && !matcher.match(tbl.getName())) {
+                    return null;
+                }
+                // Privilege check (skip if auth is disabled)
+                if (!skipAuth) {
+                    boolean hasPriv = Env.getCurrentEnv().getAccessManager()
+                            .checkTblPriv(currentUser, showStmt.getCatalog(),
+                                db.getFullName(), tbl.getName(), PrivPredicate.SHOW);
+                    if (!hasPriv) {
+                        return null;
+                    }
+                }
+                return tbl;
+            });
+        } catch (Exception e) {
+            LOG.warn("Failed to execute parallel table filtering for ShowTableStatus", e);
+            throw new AnalysisException("Failed to filter tables in parallel", e);
         }
-        // sort by table name
-        rows.sort((x, y) -> {
-            return x.get(0).compareTo(y.get(0));
-        });
+
+        // 3. Build result rows sequentially
+        for (TableIf table : candidateTables) {
+            List<String> row = Lists.newArrayList();
+            row.add(table.getName());
+            row.add(table.getEngine());
+            row.add(null);
+            row.add(null);
+            row.add(String.valueOf(table.getCachedRowCount()));
+            row.add(String.valueOf(table.getAvgRowLength()));
+            row.add(String.valueOf(table.getDataLength()));
+            row.add(null);
+            row.add(null);
+            row.add(null);
+            row.add(null);
+            row.add(TimeUtils.longToTimeString(table.getCreateTime() * 1000));
+            row.add(table.getUpdateTime() > 0 ? TimeUtils.longToTimeString(table.getUpdateTime()) : null);
+            row.add(table.getLastCheckTime() > 0 ? TimeUtils.longToTimeString(table.getLastCheckTime()) : null);
+            row.add("utf-8");
+            row.add(null);
+            row.add(null);
+            row.add(table.getComment());
+            rows.add(row);
+        }
+
+        // 4. Sort result by table name
+        rows.sort((x, y) -> x.get(0).compareTo(y.get(0)));
         resultSet = new ShowResultSet(showStmt.getMetaData(), rows);
     }
 

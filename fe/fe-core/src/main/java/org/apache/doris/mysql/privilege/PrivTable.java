@@ -18,13 +18,17 @@
 package org.apache.doris.mysql.privilege;
 
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.PatternMatcherException;
+import org.apache.doris.common.async.AsyncThreadPoolFactory;
+import org.apache.doris.common.async.CompletableFutureUtil;
 import org.apache.doris.common.io.Text;
 
 import com.google.common.collect.Lists;
+import org.apache.commons.collections.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -36,7 +40,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 public abstract class PrivTable {
     private static final Logger LOG = LogManager.getLogger(PrivTable.class);
@@ -106,6 +115,11 @@ public abstract class PrivTable {
         return existingEntry;
     }
 
+    private void mergePriv(
+            PrivEntry first, PrivEntry second) {
+        first.getPrivSet().or(second.getPrivSet());
+    }
+
     public List<PrivEntry> getEntries() {
         if (Objects.isNull(entries) || entries.isEmpty()) {
             return Lists.newArrayList();
@@ -162,11 +176,126 @@ public abstract class PrivTable {
         return  entries.get(entry.getPrivKey());
     }
 
+    /**
+     * Performs short-circuit privilege rule matching with adaptive execution strategy.
+     * Automatically switches between synchronous and parallel modes based on entry list size.
+     * <p>
+     * Core design principles:
+     * 1. Adaptive execution: Synchronous mode for small datasets (zero overhead),
+     *    parallel mode for large datasets (multi-core utilization)
+     * 2. Batch processing: Merges multiple entries into single tasks to minimize
+     *    thread scheduling and context switching overhead
+     * 3. Configurable batch size: Allows precise control over task execution duration
+     *    to balance parallelism and overhead
+     * 4. Global short-circuit: Returns immediately when first valid match is found
+     * 5. Guaranteed resource cleanup: Cancels all remaining tasks upon any exit
+     * 6. Robust failure handling: Includes exponential backoff retry for task submission
+     *
+     * @param <T>    Type of input entry elements to be matched
+     * @param <R>    Type of non-null match result returned by the matching function
+     * @param entries List of entries to perform matching against
+     * @param func    Function that executes matching logic for each entry
+     * @return First non-null matching result, or null if no valid match is found
+     * @throws IllegalStateException If any error, timeout, or execution failure occurs
+     */
+    protected <T, R> R doPrivMatch(List<T> entries, Function<T, R> func) {
+        if (CollectionUtils.isEmpty(entries)) {
+            return null;
+        }
 
-    private void mergePriv(
-            PrivEntry first, PrivEntry second) {
-        first.getPrivSet().or(second.getPrivSet());
+        if (entries.size() < Config.parallel_auth_check_threshold) {
+            // Synchronous mode: Optimal for small datasets, eliminates parallel overhead
+            return doBatch(entries, func);
+        } else {
+            // Parallel mode: Leverages multi-core processing for large datasets
+            ThreadPoolExecutor executor = (ThreadPoolExecutor) AsyncThreadPoolFactory.getInstance()
+                    .getThreadPool(AsyncThreadPoolFactory.ThreadPoolType.PRIVILEGE_CHECK);
+
+            int totalPolicies = entries.size();
+            int batchSize = Config.parallel_auth_batch_size;
+            int totalTasks = (totalPolicies + batchSize - 1) / batchSize;
+
+            List<CompletableFuture<R>> allFutures = new ArrayList<>(totalTasks);
+
+            // Submit all tasks with exponential backoff retry
+            for (int i = 0; i < totalTasks; i++) {
+                int start = i * batchSize;
+                int end = Math.min(start + batchSize, totalPolicies);
+
+                if (start >= end) {
+                    break;
+                }
+
+                List<T> batchEntries = entries.subList(start, end);
+                try {
+                    CompletableFuture<R> future = CompletableFutureUtil.supplyWithRetry(
+                            () -> doBatch(batchEntries, func), executor, Config.parallel_auth_check_timeout);
+                    allFutures.add(future);
+                } catch (Exception e) {
+                    CompletableFutureUtil.cancelAllFutures(allFutures);
+                    throw e;
+                }
+            }
+
+            // Global result aggregator with short-circuit evaluation
+            CompletableFuture<R> firstMatch = new CompletableFuture<>();
+            AtomicInteger completedNullCount = new AtomicInteger(0);
+
+            allFutures.forEach(future -> {
+                future.thenAccept(res -> {
+                    if (res != null) {
+                        firstMatch.complete(res);
+                        return;
+                    }
+                    if (completedNullCount.incrementAndGet() == allFutures.size()) {
+                        firstMatch.complete(null);
+                    }
+                }).exceptionally(e -> {
+                    if (!firstMatch.isDone()) {
+                        firstMatch.completeExceptionally(e);
+                    }
+                    return null;
+                });
+            });
+
+            try {
+                // Wait for first result with global timeout
+                return firstMatch.get(Config.parallel_auth_check_timeout, TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new IllegalStateException("Privilege check failed", e);
+            } finally {
+                // Cancel remaining tasks for normal return and waiting phase exceptions
+                CompletableFutureUtil.cancelAllFutures(allFutures);
+            }
+        }
     }
+
+
+
+    /**
+     * Processes a batch of entries sequentially with short-circuit evaluation.
+     * Shared execution logic for both synchronous and parallel modes.
+     *
+     * @param batch Batch of entries to process
+     * @param func  Matching function to apply to each entry
+     * @param <T>   Type of input entry elements
+     * @param <R>   Type of match result
+     * @return First non-null match result in the batch, or null if no match found
+     */
+    private <T, R> R doBatch(List<T> batch, Function<T, R> func) {
+        if (CollectionUtils.isEmpty(batch)) {
+            return null;
+        }
+        return batch.stream()
+            .map(func)
+            .filter(Objects::nonNull)
+            .findFirst()
+            .orElse(null);
+    }
+
 
     // for test only
     public void clear() {

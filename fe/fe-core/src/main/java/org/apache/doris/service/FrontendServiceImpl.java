@@ -67,6 +67,7 @@ import org.apache.doris.common.ThriftServerEventProcessor;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.Version;
 import org.apache.doris.common.annotation.LogException;
+import org.apache.doris.common.async.CommonAsyncProcessor;
 import org.apache.doris.common.util.DebugPointUtil;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.cooldown.CooldownDelete;
@@ -284,12 +285,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
@@ -511,6 +507,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         return db;
     }
 
+
     @LogException
     @Override
     public TGetTablesResult getTableNames(TGetTablesParams params) throws TException {
@@ -520,56 +517,81 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         TGetTablesResult result = new TGetTablesResult();
         List<String> tablesResult = Lists.newArrayList();
         result.setTables(tablesResult);
-        PatternMatcher matcher = null;
+
+        // 1. Initialize pattern matcher
+        final PatternMatcher matcher;
         if (params.isSetPattern()) {
             try {
                 matcher = PatternMatcher.createMysqlPattern(params.getPattern(),
-                        CaseSensibility.TABLE.getCaseSensibility());
+                    CaseSensibility.TABLE.getCaseSensibility());
             } catch (PatternMatcherException e) {
                 throw new TException("Pattern is in bad format: " + params.getPattern());
             }
+        } else {
+            matcher = null;
         }
 
-        // database privs should be checked in analysis phrase
-        UserIdentity currentUser;
+        // 2. Get current user identity
+        final UserIdentity currentUser;
         if (params.isSetCurrentUserIdent()) {
             currentUser = UserIdentity.fromThrift(params.current_user_ident);
         } else {
             currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
         }
-        String catalogName = Strings.isNullOrEmpty(params.catalog) ? InternalCatalog.INTERNAL_CATALOG_NAME
-                : params.catalog;
+
+        // 3. Initialize catalog and database
+        String catalogName = Strings.isNullOrEmpty(params.catalog) ? InternalCatalog.INTERNAL_CATALOG_NAME :
+                params.catalog;
         String dbName = getDbNameFromMysqlTableSchema(catalogName, params.db);
+
         DatabaseIf<TableIf> db = Env.getCurrentEnv().getCatalogMgr()
                 .getCatalogOrException(catalogName, catalog -> new TException("Unknown catalog: " + catalog))
-                .getDbNullable(dbName);
-
-        if (db != null) {
-            Set<String> tableNames;
-            try {
-                tableNames = db.getTableNamesOrEmptyWithLock();
-                for (String tableName : tableNames) {
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug("get table: {}, wait to check", tableName);
-                    }
-                    if (matcher != null && !matcher.match(tableName)) {
-                        continue;
-                    }
-                    if (!Env.getCurrentEnv().getAccessManager()
-                            .checkTblPriv(currentUser, catalogName, dbName, tableName,
-                            PrivPredicate.SHOW)) {
-                        continue;
-                    }
-                    tablesResult.add(tableName);
-                }
-            } catch (Exception e) {
-                LOG.warn("failed to get table names for db {} in catalog {}", params.db, catalogName, e);
-            }
+                    .getDbNullable(dbName);
+        if (db == null) {
+            return result;
         }
+
+        // 4. Get all table names
+        ArrayList<String> tableNames;
+        try {
+            tableNames = new ArrayList<>(db.getTableNamesOrEmptyWithLock());
+        } catch (Exception e) {
+            LOG.warn("failed to get table names for db {} in catalog {}", dbName, catalogName, e);
+            return result;
+        }
+
+        // 5. Parallel filter tables by pattern and privilege
+        List<String> candidateTables;
+        try {
+            candidateTables = CommonAsyncProcessor.filter(tableNames, tableName -> {
+                // Pattern matching filter
+                if (matcher != null && !matcher.match(tableName)) {
+                    return null;
+                }
+                // Privilege check
+                try {
+                    if (!Env.getCurrentEnv().getAccessManager()
+                            .checkTblPriv(currentUser, catalogName, dbName, tableName, PrivPredicate.SHOW)) {
+                        return null;
+                    }
+                } catch (Exception e) {
+                    LOG.warn("check table priv failed for table: {}", tableName, e);
+                    return null;
+                }
+                return tableName;
+            });
+        } catch (Exception e) {
+            LOG.warn("Failed to execute parallel table filtering for getTableNames, db: {}", dbName, e);
+            throw new TException("Failed to filter tables in parallel", e);
+        }
+
+        // 6. Collect result
+        tablesResult.addAll(candidateTables);
+        result.setTables(tablesResult);
+
         return result;
     }
 
-    @Override
     public TListTableStatusResult listTableStatus(TGetTablesParams params) throws TException {
         if (LOG.isDebugEnabled()) {
             LOG.debug("get list table request: {}", params);
@@ -577,92 +599,114 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         TListTableStatusResult result = new TListTableStatusResult();
         List<TTableStatus> tablesResult = Lists.newArrayList();
         result.setTables(tablesResult);
-        PatternMatcher matcher = null;
-        String specifiedTable = null;
+
+        // 1. Build pattern matcher and table filter
+        final PatternMatcher matcher;
         if (params.isSetPattern()) {
             try {
                 matcher = PatternMatcher.createMysqlPattern(params.getPattern(),
-                        CaseSensibility.TABLE.getCaseSensibility());
+                    CaseSensibility.TABLE.getCaseSensibility());
             } catch (PatternMatcherException e) {
                 throw new TException("Pattern is in bad format " + params.getPattern());
             }
+        } else {
+            matcher = null;
         }
-        if (params.isSetTable()) {
-            specifiedTable = params.getTable();
-        }
-        // database privs should be checked in analysis phrase
 
-        UserIdentity currentUser;
+        // 2. Get current user identity
+        final UserIdentity currentUser;
         if (params.isSetCurrentUserIdent()) {
             currentUser = UserIdentity.fromThrift(params.current_user_ident);
         } else {
             currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
         }
 
-        String catalogName = InternalCatalog.INTERNAL_CATALOG_NAME;
-        if (params.isSetCatalog()) {
-            catalogName = params.catalog;
-        }
+        // 3. Get catalog and database
+        String catalogName = params.isSetCatalog() ? params.getCatalog() : InternalCatalog.INTERNAL_CATALOG_NAME;
         String dbName = getDbNameFromMysqlTableSchema(catalogName, params.db);
         CatalogIf catalog = Env.getCurrentEnv().getCatalogMgr().getCatalog(catalogName);
-        if (catalog != null) {
-            DatabaseIf db = catalog.getDbNullable(dbName);
-            if (db != null) {
-                try {
-                    List<TableIf> tables;
-                    if (!params.isSetType() || params.getType() == null || params.getType().isEmpty()) {
-                        tables = db.getTablesIgnoreException();
-                    } else {
-                        switch (params.getType()) {
-                            case "VIEW":
-                                tables = db.getViewsOrEmpty();
-                                break;
-                            default:
-                                tables = db.getTablesIgnoreException();
-                        }
-                    }
-                    for (TableIf table : tables) {
-                        //check the priv at last to avoid too many privs
-                        if (specifiedTable != null && !specifiedTable.equals(table.getName())) {
-                            continue;
-                        }
-                        if (matcher != null && !matcher.match(table.getName())) {
-                            continue;
-                        }
-                        if (!Env.getCurrentEnv().getAccessManager()
-                                .checkTblPriv(currentUser, catalogName, dbName,
-                                table.getName(), PrivPredicate.SHOW)) {
-                            continue;
-                        }
-                        table.readLock();
-                        try {
-                            long lastCheckTime = table.getLastCheckTime() <= 0 ? 0 : table.getLastCheckTime();
-                            TTableStatus status = new TTableStatus();
-                            status.setName(table.getName());
-                            status.setType(table.getMysqlType());
-                            status.setEngine(table.getEngine());
-                            status.setComment(table.getComment());
-                            status.setCreateTime(table.getCreateTime());
-                            status.setLastCheckTime(lastCheckTime / 1000);
-                            status.setUpdateTime(table.getUpdateTime() / 1000);
-                            status.setCheckTime(lastCheckTime / 1000);
-                            status.setCollation("utf-8");
-                            status.setRows(table.getCachedRowCount());
-                            status.setDataLength(table.getDataLength());
-                            status.setAvgRowLength(table.getAvgRowLength());
-                            if (table instanceof View) {
-                                status.setDdlSql(((View) table).getInlineViewDef());
-                            }
-                            tablesResult.add(status);
-                        } finally {
-                            table.readUnlock();
-                        }
-                    }
-                } catch (Exception e) {
-                    LOG.warn("failed to get tables for db {} in catalog {}", db.getFullName(), catalogName, e);
+        DatabaseIf db;
+
+        if (catalog == null || (db = catalog.getDbNullable(dbName)) == null) {
+            return result;
+        }
+
+        // 4. Get tables by type
+        List<TableIf> tables;
+        try {
+            if (!params.isSetType() || params.getType() == null || params.getType().isEmpty()) {
+                tables = db.getTablesIgnoreException();
+            } else {
+                if ("VIEW".equals(params.getType())) {
+                    tables = db.getViewsOrEmpty();
+                } else {
+                    tables = db.getTablesIgnoreException();
                 }
             }
+        } catch (Exception e) {
+            LOG.warn("failed to get tables for db {} in catalog {}", dbName, catalogName, e);
+            return result;
         }
+        final String specifiedTable = params.isSetTable() ? params.getTable() : null;
+
+        // 5. Parallel filter tables by pattern, specified table and privilege
+        List<TableIf> candidateTables;
+        try {
+            candidateTables = CommonAsyncProcessor.filter(tables, table -> {
+                // Filter 1: specified table
+                if (specifiedTable != null && !specifiedTable.equals(table.getName())) {
+                    return null;
+                }
+                // Filter 2: pattern matching
+                if (matcher != null && !matcher.match(table.getName())) {
+                    return null;
+                }
+                // Filter 3: privilege check
+                try {
+                    if (!Env.getCurrentEnv().getAccessManager()
+                            .checkTblPriv(currentUser, catalogName, dbName,
+                            table.getName(), PrivPredicate.SHOW)) {
+                        return null;
+                    }
+                } catch (Exception e) {
+                    LOG.warn("check table priv failed for table: {}", table.getName(), e);
+                    return null;
+                }
+                // Only return table if passed all filters
+                return table;
+            });
+        } catch (Exception e) {
+            LOG.warn("Failed to execute parallel table filtering for listTableStatus, db: {}", dbName);
+            throw new TException("Failed to filter tables in parallel", e);
+        }
+
+        // 6. Build table status with read lock
+        for (TableIf table : candidateTables) {
+            table.readLock();
+            try {
+                long lastCheckTime = table.getLastCheckTime() <= 0 ? 0 : table.getLastCheckTime();
+                TTableStatus status = new TTableStatus();
+                status.setName(table.getName());
+                status.setType(table.getMysqlType());
+                status.setEngine(table.getEngine());
+                status.setComment(table.getComment());
+                status.setCreateTime(table.getCreateTime());
+                status.setLastCheckTime(lastCheckTime / 1000);
+                status.setUpdateTime(table.getUpdateTime() / 1000);
+                status.setCheckTime(lastCheckTime / 1000);
+                status.setCollation("utf-8");
+                status.setRows(table.getCachedRowCount());
+                status.setDataLength(table.getDataLength());
+                status.setAvgRowLength(table.getAvgRowLength());
+                if (table instanceof View) {
+                    status.setDdlSql(((View) table).getInlineViewDef());
+                }
+                tablesResult.add(status);
+            } finally {
+                table.readUnlock();
+            }
+        }
+
         return result;
     }
 
@@ -675,76 +719,87 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         List<TTableMetadataNameIds> tablesResult = Lists.newArrayList();
         result.setTables(tablesResult);
 
-        UserIdentity currentUser;
+        // 1. Get current user identity
+        final UserIdentity currentUser;
         if (params.isSetCurrentUserIdent()) {
             currentUser = UserIdentity.fromThrift(params.current_user_ident);
         } else {
             currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
         }
 
-        String catalogName;
-        if (params.isSetCatalog()) {
-            catalogName = params.catalog;
-        } else {
-            catalogName = InternalCatalog.INTERNAL_CATALOG_NAME;
-        }
-
-        PatternMatcher matcher = null;
+        // 2. Build pattern matcher
+        final PatternMatcher matcher;
         if (params.isSetPattern()) {
             try {
                 matcher = PatternMatcher.createMysqlPattern(params.getPattern(),
-                        CaseSensibility.TABLE.getCaseSensibility());
+                    CaseSensibility.TABLE.getCaseSensibility());
             } catch (PatternMatcherException e) {
                 throw new TException("Pattern is in bad format " + params.getPattern());
             }
+        } else {
+            matcher = null;
         }
-        PatternMatcher finalMatcher = matcher;
 
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        Future<?> future = executor.submit(() -> {
+        // 3. Get catalog and database
+        String catalogName = params.isSetCatalog() ? params.getCatalog() : InternalCatalog.INTERNAL_CATALOG_NAME;
+        CatalogIf catalog = Env.getCurrentEnv().getCatalogMgr().getCatalog(catalogName);
+        if (catalog == null) {
+            return result;
+        }
 
-            CatalogIf catalog = Env.getCurrentEnv().getCatalogMgr().getCatalog(catalogName);
-            if (catalog != null) {
-                String dbName = getDbNameFromMysqlTableSchema(catalogName, params.db);
-                DatabaseIf db = catalog.getDbNullable(dbName);
-                if (db != null) {
-                    List<TableIf> tables = db.getTables();
-                    for (TableIf table : tables) {
-                        if (finalMatcher != null && !finalMatcher.match(table.getName())) {
-                            continue;
-                        }
-                        if (!Env.getCurrentEnv().getAccessManager().checkTblPriv(currentUser, catalogName, dbName,
-                                table.getName(), PrivPredicate.SHOW)) {
-                            continue;
-                        }
-                        table.readLock();
-                        try {
-                            TTableMetadataNameIds status = new TTableMetadataNameIds();
-                            status.setName(table.getName());
-                            status.setId(table.getId());
+        String dbName = getDbNameFromMysqlTableSchema(catalogName, params.db);
+        DatabaseIf db = catalog.getDbNullable(dbName);
+        if (db == null) {
+            return result;
+        }
 
-                            tablesResult.add(status);
-                        } finally {
-                            table.readUnlock();
-                        }
-                    }
-                }
-            }
-        });
+        // 4. Get all tables
+        List<TableIf> tables;
         try {
-            if (catalogName.equals(InternalCatalog.INTERNAL_CATALOG_NAME)) {
-                future.get();
-            } else {
-                future.get(Config.query_metadata_name_ids_timeout, TimeUnit.SECONDS);
-            }
-        } catch (TimeoutException e) {
-            future.cancel(true);
-            LOG.info("From catalog:{},db:{} get tables timeout.", catalogName, params.db);
-        } catch (InterruptedException | ExecutionException e) {
-            future.cancel(true);
-        } finally {
-            executor.shutdown();
+            tables = db.getTables();
+        } catch (Exception e) {
+            LOG.warn("Failed to get tables for db {} in catalog {}", dbName, catalogName, e);
+            return result;
         }
+
+        // 5. Parallel filter tables by pattern and privilege
+        List<TableIf> candidateTables;
+        try {
+            candidateTables = CommonAsyncProcessor.filter(tables, table -> {
+                // Filter 1: pattern match
+                if (matcher != null && !matcher.match(table.getName())) {
+                    return null;
+                }
+                // Filter 2: privilege check
+                try {
+                    if (!Env.getCurrentEnv().getAccessManager().checkTblPriv(currentUser, catalogName, dbName,
+                            table.getName(), PrivPredicate.SHOW)) {
+                        return null;
+                    }
+                } catch (Exception e) {
+                    LOG.warn("check table priv failed for table: {}", table.getName(), e);
+                    return null;
+                }
+                return table;
+            });
+        } catch (Exception e) {
+            LOG.warn("Failed to execute parallel table filtering for listTableMetadataNameIds, db: {}", dbName, e);
+            throw new TException("Failed to filter tables in parallel", e);
+        }
+
+        // 6. Build metadata result with read lock
+        for (TableIf table : candidateTables) {
+            table.readLock();
+            try {
+                TTableMetadataNameIds status = new TTableMetadataNameIds();
+                status.setName(table.getName());
+                status.setId(table.getId());
+                tablesResult.add(status);
+            } finally {
+                table.readUnlock();
+            }
+        }
+
         return result;
     }
 

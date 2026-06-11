@@ -17,88 +17,123 @@
 
 package org.apache.doris.mysql.privilege;
 
+
 import com.google.common.base.Preconditions;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
 
 /*
  * TablePrivTable saves all table level privs
  */
 public class TablePrivTable extends PrivTable {
+    private static final Logger LOG = LogManager.getLogger(TablePrivTable.class);
 
     /*
      * Return first priv which match the user@host on ctl.db.tbl The returned priv will
      * be saved in 'savedPrivs'.
      */
+    @SuppressWarnings("checkstyle:Indentation")
     public void getPrivs(String ctl, String db, String tbl, PrivBitSet savedPrivs) {
-        TablePrivEntry matchedEntry = null;
-        for (PrivEntry entry : getEntries()) {
-            TablePrivEntry tblPrivEntry = (TablePrivEntry) entry;
-            // check catalog
-            if (!tblPrivEntry.isAnyCtl() && !tblPrivEntry.getCtlPattern().match(ctl)) {
-                continue;
-            }
-
-            // check db
-            Preconditions.checkState(!tblPrivEntry.isAnyDb());
-            if (!tblPrivEntry.getDbPattern().match(db)) {
-                continue;
-            }
-
-            // check table
-            if (!tblPrivEntry.getTblPattern().match(tbl)) {
-                continue;
-            }
-
-            matchedEntry = tblPrivEntry;
-            break;
-        }
-        if (matchedEntry == null) {
+        List<PrivEntry> entries = getEntries();
+        if (Objects.isNull(entries) || entries.isEmpty()) {
             return;
         }
 
-        savedPrivs.or(matchedEntry.getPrivSet());
+        Function<PrivEntry, TablePrivEntry> matchFunc = entry -> {
+            try {
+                TablePrivEntry tblPrivEntry = (TablePrivEntry) entry;
+
+                if (!tblPrivEntry.isAnyCtl() && !tblPrivEntry.getCtlPattern().match(ctl)) {
+                    return null;
+                }
+
+                Preconditions.checkState(!tblPrivEntry.isAnyDb());
+                if (!tblPrivEntry.getDbPattern().match(db)) {
+                    return null;
+                }
+
+                if (!tblPrivEntry.getTblPattern().match(tbl)) {
+                    return null;
+                }
+
+                return tblPrivEntry;
+
+            } catch (Exception e) {
+                LOG.warn("Privilege check failed when invoking getPrivs, ctl:{}, db:{}, tbl:{}, entry:{}",
+                        ctl, db, tbl, entry, e);
+                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
+            }
+        };
+
+        TablePrivEntry matchedEntry = doPrivMatch(entries, matchFunc);
+        // Finally set privilege
+        if (Objects.nonNull(matchedEntry)) {
+            savedPrivs.or(matchedEntry.getPrivSet());
+        }
     }
 
     public boolean hasPrivsOfCatalog(String ctl) {
-        for (PrivEntry entry : getEntries()) {
-            TablePrivEntry tblPrivEntry = (TablePrivEntry) entry;
-            // check catalog
-            Preconditions.checkState(!tblPrivEntry.isAnyCtl());
-            if (tblPrivEntry.getCtlPattern().match(ctl)) {
-                return true;
-            }
+        List<PrivEntry> entries = getEntries();
+        if (Objects.isNull(entries) || entries.isEmpty()) {
+            return false;
         }
-        return false;
+
+        Function<PrivEntry, Boolean> matchFunc =  entry -> {
+            try {
+                TablePrivEntry tblPrivEntry = (TablePrivEntry) entry;
+
+                Preconditions.checkState(!tblPrivEntry.isAnyCtl());
+                if (tblPrivEntry.getCtlPattern().match(ctl)) {
+                    return true;
+                }
+                return null;
+            } catch (Exception e) {
+                LOG.warn("Privilege check failed when invoking hasPrivsOfCatalog, ctl:{} entry:{}", ctl,  entry, e);
+                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
+            }
+        };
+
+        Boolean isMatched = doPrivMatch(entries, matchFunc);
+
+        return Objects.nonNull(isMatched) && isMatched;
     }
 
     public boolean hasPrivsOfDb(String ctl, String db) {
-        for (PrivEntry entry : getEntries()) {
-            TablePrivEntry
-                    tblPrivEntry = (TablePrivEntry) entry;
-
-            // check catalog
-            Preconditions.checkState(!tblPrivEntry.isAnyCtl());
-            if (!tblPrivEntry.getCtlPattern().match(ctl)) {
-                continue;
-            }
-
-            // check db
-            Preconditions.checkState(!tblPrivEntry.isAnyDb());
-            if (!tblPrivEntry.getDbPattern().match(db)) {
-                continue;
-            }
-
-            return true;
+        List<PrivEntry> entries = getEntries();
+        if (Objects.isNull(entries) || entries.isEmpty()) {
+            return false;
         }
-        return false;
-    }
 
-    public boolean hasClusterPriv(String clusterName) {
-        for (PrivEntry entry : getEntries()) {
-            TablePrivEntry tblPrivEntry = (TablePrivEntry) entry;
-            if (tblPrivEntry.getOrigDb().startsWith(clusterName)) {
+        Function<PrivEntry, Boolean> matchFunc =  entry -> {
+            try {
+                TablePrivEntry tblPrivEntry = (TablePrivEntry) entry;
+
+                // check catalog
+                Preconditions.checkState(!tblPrivEntry.isAnyCtl());
+                if (!tblPrivEntry.getCtlPattern().match(ctl)) {
+                    return null;
+                }
+
+                // check db
+                Preconditions.checkState(!tblPrivEntry.isAnyDb());
+                if (!tblPrivEntry.getDbPattern().match(db)) {
+                    return null;
+                }
+
                 return true;
+            } catch (Exception e) {
+                LOG.warn("Privilege check failed when invoking hasPrivsOfDb, ctl:{} entry:{}", ctl,  entry, e);
+                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
             }
-        }
-        return false;
+        };
+
+        Boolean isMatched = doPrivMatch(entries, matchFunc);
+
+        return Objects.nonNull(isMatched) && isMatched;
     }
+
 }

@@ -20,6 +20,10 @@ package org.apache.doris.mysql.privilege;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
+
 /*
  * CatalogPrivTable saves all catalog level privs
  */
@@ -31,22 +35,31 @@ public class CatalogPrivTable extends PrivTable {
      * saved in 'savedPrivs'.
      */
     public void getPrivs(String ctl, PrivBitSet savedPrivs) {
-        CatalogPrivEntry matchedEntry = null;
-        for (PrivEntry entry : getEntries()) {
-            CatalogPrivEntry ctlPrivEntry = (CatalogPrivEntry) entry;
-
-            // check catalog
-            if (!ctlPrivEntry.isAnyCtl() && !ctlPrivEntry.getCtlPattern().match(ctl)) {
-                continue;
-            }
-
-            matchedEntry = ctlPrivEntry;
-            break;
-        }
-        if (matchedEntry == null) {
+        List<PrivEntry> entries = getEntries();
+        if (Objects.isNull(entries) || entries.isEmpty()) {
             return;
         }
 
-        savedPrivs.or(matchedEntry.getPrivSet());
+        Function<PrivEntry, CatalogPrivEntry> matchFunc = entry -> {
+            try {
+                CatalogPrivEntry ctlPrivEntry = (CatalogPrivEntry) entry;
+
+                // check catalog
+                if (!ctlPrivEntry.isAnyCtl() && !ctlPrivEntry.getCtlPattern().match(ctl)) {
+                    return null;
+                }
+
+                return ctlPrivEntry;
+            } catch (Exception e) {
+                LOG.warn("Privilege check failed when invoking getPrivs, ctl:{}, entry:{}",
+                        ctl, entry, e);
+                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
+            }
+        };
+        CatalogPrivEntry matchedEntry = doPrivMatch(entries, matchFunc);
+        // Finally set privilege
+        if (Objects.nonNull(matchedEntry)) {
+            savedPrivs.or(matchedEntry.getPrivSet());
+        }
     }
 }
