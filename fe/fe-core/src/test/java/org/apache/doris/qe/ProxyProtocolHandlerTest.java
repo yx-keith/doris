@@ -54,7 +54,7 @@ public class ProxyProtocolHandlerTest {
         }
 
         @Override
-        public int testReadWithTimeout(ByteBuffer buffer, long timeoutMs) {
+        public int readWithTimeout(ByteBuffer buffer, long timeoutMs) {
             if (testReadReturn == 1) {
                 return read(buffer);
             } else {

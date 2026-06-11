@@ -27,7 +27,7 @@ public interface BytesChannel {
      */
     public int read(ByteBuffer buffer);
 
-    default int testReadWithTimeout(ByteBuffer buffer, long timeoutMs) {
+    default int readWithTimeout(ByteBuffer buffer, long timeoutMs) {
         return read(buffer);
     }
 }

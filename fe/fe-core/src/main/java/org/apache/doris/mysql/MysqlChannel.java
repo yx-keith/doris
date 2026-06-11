@@ -254,8 +254,7 @@ public class MysqlChannel implements BytesChannel {
     }
 
     @Override
-    public int testReadWithTimeout(ByteBuffer dstBuf, long timeoutMs) {
-        Preconditions.checkArgument(dstBuf.remaining() == 1, dstBuf.remaining());
+    public int readWithTimeout(ByteBuffer dstBuf, long timeoutMs) {
         try {
             return Channels.readBlocking(conn.getSourceChannel(), dstBuf, timeoutMs, TimeUnit.MILLISECONDS);
         } catch (IOException e) {
