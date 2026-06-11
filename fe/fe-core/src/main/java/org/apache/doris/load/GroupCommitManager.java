@@ -22,6 +22,7 @@ import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.LoadException;
+import org.apache.doris.common.Pair;
 import org.apache.doris.common.util.SlidingWindowCounter;
 import org.apache.doris.mysql.privilege.Auth;
 import org.apache.doris.proto.InternalService.PGetWalQueueSizeRequest;
@@ -42,6 +43,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
@@ -53,10 +55,8 @@ public class GroupCommitManager {
 
     private Set<Long> blockedTableIds = new HashSet<>();
 
-    // Table id to BE id map. Only for group commit.
-    private Map<Long, Long> tableToBeMap = new ConcurrentHashMap<>();
-    // Table id to pressure map. Only for group commit.
-    private Map<Long, SlidingWindowCounter> tableToPressureMap = new ConcurrentHashMap<>();
+    // Table id to be id and be pressure map. Only for group commit.
+    private Map<Long, Pair<Long, SlidingWindowCounter>> tableToBePairMap = new ConcurrentHashMap<>();
 
     public boolean isBlock(long tableId) {
         return blockedTableIds.contains(tableId);
@@ -236,8 +236,7 @@ public class GroupCommitManager {
     }
 
     private long selectBackendForLocalGroupCommitInternal(long tableId) throws LoadException {
-        LOG.debug("group commit select be info, tableToBeMap {}, tableToPressureMap {}", tableToBeMap.toString(),
-                tableToPressureMap.toString());
+        LOG.debug("group commit select be info, tableToBePairMap {}", tableToBePairMap.toString());
         Long cachedBackendId = getCachedBackend(tableId);
         if (cachedBackendId != null) {
             return cachedBackendId;
@@ -263,25 +262,16 @@ public class GroupCommitManager {
     @Nullable
     private Long getCachedBackend(long tableId) {
         OlapTable table = (OlapTable) Env.getCurrentEnv().getInternalCatalog().getTableByTableId(tableId);
-        if (tableToBeMap.containsKey(tableId)) {
-            if (tableToPressureMap.get(tableId).get() < table.getGroupCommitDataBytes()) {
-                // There are multiple threads getting cached backends for the same table.
-                // Maybe one thread removes the tableId from the tableToBeMap.
-                // Another thread gets the same tableId but can not find this tableId.
-                // So another thread needs to get the random backend.
-                Long backendId = tableToBeMap.get(tableId);
-                if (backendId == null) {
-                    return null;
-                }
-                Backend backend = Env.getCurrentSystemInfo().getBackend(backendId);
-                if (backend != null && backend.isAlive() && !backend.isDecommissioned()) {
-                    return backend.getId();
-                } else {
-                    tableToBeMap.remove(tableId);
-                }
-            } else {
-                tableToBeMap.remove(tableId);
+        Pair<Long, SlidingWindowCounter> cachedBackendWithCounter = tableToBePairMap.get(tableId);
+        if (cachedBackendWithCounter != null) {
+            Long backendId = cachedBackendWithCounter.first;
+            Backend backend = Env.getCurrentSystemInfo().getBackend(backendId);
+            boolean isBeAvailable = backend != null && backend.isAlive() && !backend.isDecommissioned();
+            boolean notExceed = cachedBackendWithCounter.second.get() < table.getGroupCommitDataBytes();
+            if (isBeAvailable && notExceed) {
+                return backendId;
             }
+            tableToBePairMap.remove(tableId);
         }
         return null;
     }
@@ -289,16 +279,20 @@ public class GroupCommitManager {
     @Nullable
     private Long getRandomBackend(long tableId, List<Backend> backends) {
         OlapTable table = (OlapTable) Env.getCurrentEnv().getInternalCatalog().getTableByTableId(tableId);
-        Collections.shuffle(backends);
-        for (Backend backend : backends) {
-            if (backend.isAlive() && !backend.isDecommissioned()) {
-                tableToBeMap.put(tableId, backend.getId());
-                tableToPressureMap.put(tableId,
-                        new SlidingWindowCounter(table.getGroupCommitIntervalMs() / 1000 + 1));
-                return backend.getId();
-            }
-        }
-        return null;
+        int groupCommitIntervalMs = table.getGroupCommitIntervalMs();
+        Pair<Long, SlidingWindowCounter> targetPair = tableToBePairMap.computeIfAbsent(
+                tableId,
+                k -> {
+                    Collections.shuffle(backends);
+                    Optional<Backend> optional = backends.stream()
+                            .filter(be -> be.isAlive() && !be.isDecommissioned()).findFirst();
+                    if (!optional.isPresent()) {
+                        return null;
+                    }
+                    Backend selectedBackend = optional.get();
+                    return Pair.of(selectedBackend.getId(), new SlidingWindowCounter(groupCommitIntervalMs / 1000 + 1));
+                });
+        return targetPair == null ? null : targetPair.first;
     }
 
     public void updateLoadData(long tableId, long receiveData) {
@@ -323,11 +317,14 @@ public class GroupCommitManager {
     }
 
     private void updateLoadDataInternal(long tableId, long receiveData) {
-        if (tableToPressureMap.containsKey(tableId)) {
-            tableToPressureMap.get(tableId).add(receiveData);
-            LOG.info("Update load data for table {}, receiveData {}, tablePressureMap {}", tableId, receiveData,
-                    tableToPressureMap.toString());
-        } else if (LOG.isDebugEnabled()) {
+        Pair<Long, SlidingWindowCounter> pair = tableToBePairMap.get(tableId);
+        if (pair != null) {
+            pair.second.add(receiveData);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Update load data for table {}, receiveData {}, tablePressureMap {}",
+                        tableId, receiveData, pair.second.toString());
+            }
+        } else {
             LOG.debug("can not find table id {}", tableId);
         }
     }
