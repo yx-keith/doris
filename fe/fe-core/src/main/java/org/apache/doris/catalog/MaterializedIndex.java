@@ -123,22 +123,22 @@ public class MaterializedIndex extends MetaObject implements Writable, GsonPostP
         idToTablets = new HashMap<>();
     }
 
-    public synchronized void addTablet(Tablet tablet, TabletMeta tabletMeta) {
+    public void addTablet(Tablet tablet, TabletMeta tabletMeta) {
         addTablet(tablet, tabletMeta, false);
     }
 
-    public synchronized void addTablet(Tablet tablet, TabletMeta tabletMeta, boolean isRestore) {
+    public void addTablet(Tablet tablet, TabletMeta tabletMeta, boolean isRestore) {
         appendTabletsInternal(Collections.singletonList(tablet));
         if (!isRestore) {
             Env.getCurrentInvertedIndex().addTablet(tablet.getId(), tabletMeta);
         }
     }
 
-    public synchronized void appendTablets(Collection<Tablet> newTablets) {
+    public void appendTablets(Collection<Tablet> newTablets) {
         appendTabletsInternal(newTablets);
     }
 
-    private void appendTabletsInternal(Collection<Tablet> newTablets) {
+    private synchronized void appendTabletsInternal(Collection<Tablet> newTablets) {
         if (newTablets.isEmpty()) {
             return;
         }
