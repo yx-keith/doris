@@ -549,7 +549,7 @@ TEST(CsvSerde, ComplexTypeSerdeSchemaChangedCsvTest) {
         formatOptions.null_format = null_format.data();
         formatOptions.null_len = null_format.size();
 
-        static const string str = "null";
+        string str = "null";
 
         DataTypePtr data_type_ptr = make_nullable(
                 std::make_shared<DataTypeArray>(make_nullable(std::make_shared<DataTypeString>())));
@@ -571,7 +571,7 @@ TEST(CsvSerde, ComplexTypeSerdeSchemaChangedCsvTest) {
         formatOptions.null_format = null_format.data();
         formatOptions.null_len = null_format.size();
 
-        static const string str = "\\N";
+        string str = "\\N";
         DataTypes substruct_dataTypes;
         substruct_dataTypes.push_back(make_nullable(std::make_shared<DataTypeString>()));
         substruct_dataTypes.push_back(make_nullable(std::make_shared<DataTypeString>()));
@@ -594,7 +594,7 @@ TEST(CsvSerde, ComplexTypeSerdeSchemaChangedCsvTest) {
         formatOptions.map_key_delim = '\003';
         formatOptions.escape_char = '|';
 
-        static const string str = "\\N";
+        string str = "\\N";
         DataTypes substruct_dataTypes;
         substruct_dataTypes.push_back(make_nullable(std::make_shared<DataTypeString>()));
         substruct_dataTypes.push_back(make_nullable(std::make_shared<DataTypeString>()));
