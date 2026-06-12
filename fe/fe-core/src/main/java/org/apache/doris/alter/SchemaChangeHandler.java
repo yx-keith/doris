@@ -64,6 +64,7 @@ import org.apache.doris.catalog.ReplicaAllocation;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Tablet;
+import org.apache.doris.catalog.TabletInvertedIndex;
 import org.apache.doris.catalog.TabletMeta;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
@@ -1586,14 +1587,18 @@ public class SchemaChangeHandler extends AlterHandler {
                 MaterializedIndex originIndex = partition.getIndex(originIndexId);
                 ReplicaAllocation replicaAlloc = olapTable.getPartitionInfo().getReplicaAllocation(partitionId);
                 Short totalReplicaNum = replicaAlloc.getTotalReplicaNum();
+                TabletMeta shadowTabletMeta = new TabletMeta(dbId, tableId, partitionId, shadowIndexId,
+                        newSchemaHash, medium);
+                List<Tablet> shadowTabletsForPartition = Lists.newArrayListWithCapacity(
+                        originIndex.getTablets().size());
+                TabletInvertedIndex invertedIndex = Env.getCurrentInvertedIndex();
                 for (Tablet originTablet : originIndex.getTablets()) {
-                    TabletMeta shadowTabletMeta = new TabletMeta(dbId, tableId, partitionId, shadowIndexId,
-                            newSchemaHash, medium);
                     long originTabletId = originTablet.getId();
                     long shadowTabletId = idGeneratorBuffer.getNextId();
 
                     Tablet shadowTablet = new Tablet(shadowTabletId);
-                    shadowIndex.addTablet(shadowTablet, shadowTabletMeta);
+                    invertedIndex.addTablet(shadowTabletId, shadowTabletMeta);
+                    shadowTabletsForPartition.add(shadowTablet);
                     addedTablets.add(shadowTablet);
 
                     schemaChangeJob.addTabletIdMap(partitionId, shadowIndexId, shadowTabletId, originTabletId);
@@ -1641,6 +1646,7 @@ public class SchemaChangeHandler extends AlterHandler {
                     }
                 }
 
+                shadowIndex.appendTablets(shadowTabletsForPartition);
                 schemaChangeJob.addPartitionShadowIndex(partitionId, shadowIndexId, shadowIndex);
             } // end for partition
             schemaChangeJob.addIndexSchema(shadowIndexId, originIndexId, newIndexName, newSchemaVersion, newSchemaHash,

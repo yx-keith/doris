@@ -3175,12 +3175,15 @@ public class InternalCatalog implements CatalogIf<Database> {
             }
         }
 
+        TabletInvertedIndex invertedIndex = Env.getCurrentInvertedIndex();
+        List<Tablet> bucketTablets = new ArrayList<>(distributionInfo.getBucketNum());
         for (int i = 0; i < distributionInfo.getBucketNum(); ++i) {
             // create a new tablet with random chosen backends
             Tablet tablet = new Tablet(idGeneratorBuffer.getNextId());
 
             // add tablet to inverted index first
-            index.addTablet(tablet, tabletMeta);
+            invertedIndex.addTablet(tablet.getId(), tabletMeta);
+            bucketTablets.add(tablet);
             tabletIdSet.add(tablet.getId());
 
             // get BackendIds
@@ -3219,6 +3222,7 @@ public class InternalCatalog implements CatalogIf<Database> {
             Preconditions.checkState(totalReplicaNum == replicaAlloc.getTotalReplicaNum(),
                     totalReplicaNum + " vs. " + replicaAlloc.getTotalReplicaNum());
         }
+        index.appendTablets(bucketTablets);
 
         if (groupId != null && chooseBackendsArbitrary) {
             colocateIndex.addBackendsPerBucketSeq(groupId, backendsPerBucketSeq);

@@ -411,14 +411,16 @@ public class MaterializedViewHandler extends AlterHandler {
             MaterializedIndex mvIndex = new MaterializedIndex(mvIndexId, IndexState.SHADOW);
             MaterializedIndex baseIndex = partition.getIndex(baseIndexId);
             short replicationNum = olapTable.getPartitionInfo().getReplicaAllocation(partitionId).getTotalReplicaNum();
+            TabletMeta mvTabletMeta = new TabletMeta(dbId, tableId, partitionId, mvIndexId, mvSchemaHash, medium);
+            List<Tablet> mvTabletsForPartition = Lists.newArrayListWithCapacity(baseIndex.getTablets().size());
+            TabletInvertedIndex invertedIndex = Env.getCurrentInvertedIndex();
             for (Tablet baseTablet : baseIndex.getTablets()) {
-                TabletMeta mvTabletMeta = new TabletMeta(
-                        dbId, tableId, partitionId, mvIndexId, mvSchemaHash, medium);
                 long baseTabletId = baseTablet.getId();
                 long mvTabletId = idGeneratorBuffer.getNextId();
 
                 Tablet newTablet = new Tablet(mvTabletId);
-                mvIndex.addTablet(newTablet, mvTabletMeta);
+                invertedIndex.addTablet(mvTabletId, mvTabletMeta);
+                mvTabletsForPartition.add(newTablet);
                 addedTablets.add(newTablet);
 
                 mvJob.addTabletIdMap(partitionId, mvTabletId, baseTabletId);
@@ -463,6 +465,7 @@ public class MaterializedViewHandler extends AlterHandler {
                 }
             } // end for baseTablets
 
+            mvIndex.appendTablets(mvTabletsForPartition);
             mvJob.addMVIndex(partitionId, mvIndex);
 
             if (LOG.isDebugEnabled()) {

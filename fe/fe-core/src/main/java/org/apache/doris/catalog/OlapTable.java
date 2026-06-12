@@ -797,10 +797,11 @@ public class OlapTable extends Table implements MTMVRelatedTableIf {
                 // generate new tablets in origin tablet order
                 int tabletNum = idx.getTablets().size();
                 idx.clearTabletsForRestore();
+                List<Tablet> newTablets = new ArrayList<>(tabletNum);
                 for (int i = 0; i < tabletNum; i++) {
                     long newTabletId = env.getNextId();
                     Tablet newTablet = new Tablet(newTabletId);
-                    idx.addTablet(newTablet, null /* tablet meta */, true /* is restore */);
+                    newTablets.add(newTablet);
 
                     // replicas
                     try {
@@ -820,6 +821,7 @@ public class OlapTable extends Table implements MTMVRelatedTableIf {
                         return new Status(ErrCode.COMMON_ERROR, e.getMessage());
                     }
                 }
+                idx.appendTablets(newTablets);
             }
 
             // reset partition id
