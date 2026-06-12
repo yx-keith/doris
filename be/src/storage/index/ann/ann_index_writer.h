@@ -28,6 +28,7 @@
 #include <string>
 
 #include "core/pod_array.h"
+#include "storage/index/ann/ann_build_memory_budget.h"
 #include "storage/index/ann/ann_index.h"
 #include "storage/index/index_file_writer.h"
 #include "storage/index/index_writer.h"
@@ -62,11 +63,30 @@ public:
     int64_t size() const override;
     Status finish() override;
 
+    // Rows per streaming-add flush, derived from ann_index_build_chunk_bytes.
+    static size_t streaming_chunk_rows(size_t dim);
+
 private:
     Status _build_and_save(Int64 min_train_rows, Int64 effective_min_rows);
 
+    // Training-free indexes (min_train_rows == 0, e.g. HNSW flat) add buffered
+    // vectors into the index as soon as a chunk's worth accumulated, so the
+    // input buffer stays bounded by ann_index_build_chunk_bytes instead of
+    // holding the whole segment. `force` flushes any non-empty remainder.
+    Status _flush_streaming_rows(bool force);
+
+    // Admission control against the global AnnBuildMemoryBudget. No-ops when
+    // ann_index_build_memory_budget_bytes <= 0 (default).
+    Status _acquire_memory_budget();
+    Status _ensure_reservation_for_rows(int64_t total_rows);
+    Status _apply_oom_action(int64_t estimated_bytes, int64_t waited_ms);
+    static int64_t _oom_wait_timeout_ms();
+
+    void _release_buffer();
+
 #ifdef BE_TEST
     friend class TestAnnIndexColumnWriter;
+    friend class TestSkipAwareWriter;
 #endif
 
     // VectorIndex shoule be managed by some cache.
@@ -75,6 +95,13 @@ private:
     std::shared_ptr<VectorIndex> _vector_index;
     PODArray<float> _buffered_vectors;
     int64_t _total_rows = 0;
+    // Rows already streamed into the index (training-free path only).
+    int64_t _indexed_rows = 0;
+    AnnBuildMemoryParams _build_params;
+    AnnBuildMemoryReservation _reservation;
+    // Set when admission control chose "skip": further rows are dropped and
+    // finish() deletes the index entry while the segment write succeeds.
+    bool _skip_due_to_oom = false;
     IndexFileWriter* _index_file_writer;
     const TabletIndex* _index_meta;
     std::shared_ptr<DorisFSDirectory> _dir;

@@ -1753,6 +1753,37 @@ DEFINE_mInt64(ann_index_build_min_segment_rows, "0");
 DEFINE_Validator(ann_index_build_min_segment_rows,
                  [](const int64_t config) -> bool { return config >= 0; });
 
+// Streaming-add chunk byte budget for training-free ANN index builds (e.g.
+// HNSW without quantizer). Once the buffered raw vectors exceed this many
+// bytes they are flushed into the index and the buffer is reused, so the
+// input buffer stays bounded instead of holding the whole segment.
+// Indexes that need training (IVF/PQ/SQ) ignore this and keep buffering the
+// full segment, because train() must see all rows.
+DEFINE_mInt64(ann_index_build_chunk_bytes, "134217728");
+DEFINE_Validator(ann_index_build_chunk_bytes,
+                 [](const int64_t config) -> bool { return config > 0; });
+// Global byte budget shared by all concurrent ANN/vector index builds on this BE.
+// 0 disables admission control (legacy behavior; OOM exposure unchanged).
+// Any positive value enables AnnBuildMemoryBudget: writers reserve their
+// estimated peak before buffering/building and release on finish.
+DEFINE_mInt64(ann_index_build_memory_budget_bytes, "0");
+DEFINE_Validator(ann_index_build_memory_budget_bytes,
+                 [](const int64_t config) -> bool { return config >= 0; });
+// Max time (ms) a writer waits when the budget is exhausted before applying
+// ann_index_build_on_oom_action. Only meaningful when the budget is enabled
+// and the action is "wait" or "skip".
+DEFINE_mInt64(ann_index_build_memory_wait_timeout_ms, "30000");
+DEFINE_Validator(ann_index_build_memory_wait_timeout_ms,
+                 [](const int64_t config) -> bool { return config >= 0; });
+// Behavior when the budget cannot be satisfied within the wait timeout.
+// Accepted values: "wait" (default; treat timeout as failure), "skip" (delete
+// the index entry and let the segment write succeed without ANN), "fail"
+// (return RuntimeError immediately without waiting).
+DEFINE_mString(ann_index_build_on_oom_action, "wait");
+DEFINE_Validator(ann_index_build_on_oom_action, [](const std::string& v) -> bool {
+    return v == "wait" || v == "skip" || v == "fail";
+});
+
 DEFINE_mBool(enable_wal_tde, "false");
 
 DEFINE_mBool(print_stack_when_cache_miss, "false");

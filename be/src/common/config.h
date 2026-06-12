@@ -1806,6 +1806,16 @@ DECLARE_String(ann_index_ivf_list_cache_limit);
 DECLARE_mInt32(ann_index_ivf_list_cache_stale_sweep_time_sec);
 // Minimum segment rows required to persist an ANN index.
 DECLARE_mInt64(ann_index_build_min_segment_rows);
+// Streaming-add chunk byte budget for training-free ANN index builds.
+DECLARE_mInt64(ann_index_build_chunk_bytes);
+// Global byte budget shared by all concurrent ANN/vector index builds on this BE.
+// 0 disables admission control.
+DECLARE_mInt64(ann_index_build_memory_budget_bytes);
+// Max wait time (ms) before admission control falls back to on_oom_action.
+DECLARE_mInt64(ann_index_build_memory_wait_timeout_ms);
+// One of: "wait" | "skip" | "fail" — what to do when the budget is exhausted
+// past the wait timeout.
+DECLARE_mString(ann_index_build_on_oom_action);
 
 DECLARE_mBool(enable_prefill_output_dbm_agg_cache_after_compaction);
 DECLARE_mBool(enable_prefill_all_dbm_agg_cache_after_compaction);
