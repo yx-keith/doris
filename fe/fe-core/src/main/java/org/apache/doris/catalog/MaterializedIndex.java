@@ -21,13 +21,14 @@ import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
 import org.apache.doris.persist.gson.GsonPostProcessable;
 
-import com.google.common.collect.Lists;
 import com.google.gson.annotations.SerializedName;
 
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,10 +63,12 @@ public class MaterializedIndex extends MetaObject implements Writable, GsonPostP
     @SerializedName(value = "rowCount")
     private long rowCount;
 
-    private Map<Long, Tablet> idToTablets;
+    // Published as volatile snapshots in lockstep with `tablets`.
+    // Invariant: tablets is a subset of idToTablets.
+    private volatile Map<Long, Tablet> idToTablets;
     @SerializedName(value = "tablets")
     // this is for keeping tablet order
-    private List<Tablet> tablets;
+    private volatile List<Tablet> tablets;
 
     // for push after rollup index finished
     @SerializedName(value = "rollupIndexId")
@@ -99,12 +102,13 @@ public class MaterializedIndex extends MetaObject implements Writable, GsonPostP
     }
 
     public List<Tablet> getTablets() {
-        return tablets;
+        return Collections.unmodifiableList(tablets);
     }
 
     public List<Long> getTabletIdsInOrder() {
-        List<Long> tabletIds = Lists.newArrayList();
-        for (Tablet tablet : tablets) {
+        List<Tablet> snapshot = tablets;
+        List<Long> tabletIds = new ArrayList<>(snapshot.size());
+        for (Tablet tablet : snapshot) {
             tabletIds.add(tablet.getId());
         }
         return tabletIds;
@@ -114,9 +118,9 @@ public class MaterializedIndex extends MetaObject implements Writable, GsonPostP
         return idToTablets.get(tabletId);
     }
 
-    public void clearTabletsForRestore() {
-        idToTablets.clear();
-        tablets.clear();
+    public synchronized void clearTabletsForRestore() {
+        tablets = new ArrayList<>();
+        idToTablets = new HashMap<>();
     }
 
     public void addTablet(Tablet tablet, TabletMeta tabletMeta) {
@@ -124,11 +128,29 @@ public class MaterializedIndex extends MetaObject implements Writable, GsonPostP
     }
 
     public void addTablet(Tablet tablet, TabletMeta tabletMeta, boolean isRestore) {
-        idToTablets.put(tablet.getId(), tablet);
-        tablets.add(tablet);
+        appendTabletsInternal(Collections.singletonList(tablet));
         if (!isRestore) {
             Env.getCurrentInvertedIndex().addTablet(tablet.getId(), tabletMeta);
         }
+    }
+
+    public void appendTablets(Collection<Tablet> newTablets) {
+        appendTabletsInternal(newTablets);
+    }
+
+    private synchronized void appendTabletsInternal(Collection<Tablet> newTablets) {
+        if (newTablets.isEmpty()) {
+            return;
+        }
+        Map<Long, Tablet> nextMap = new HashMap<>(idToTablets);
+        List<Tablet> nextList = new ArrayList<>(tablets.size() + newTablets.size());
+        nextList.addAll(tablets);
+        for (Tablet tablet : newTablets) {
+            nextMap.put(tablet.getId(), tablet);
+            nextList.add(tablet);
+        }
+        idToTablets = nextMap;
+        tablets = nextList;
     }
 
     public void setIdForRestore(long idxId) {
@@ -198,8 +220,9 @@ public class MaterializedIndex extends MetaObject implements Writable, GsonPostP
     }
 
     public int getTabletOrderIdx(long tabletId) {
+        List<Tablet> snapshot = tablets;
         int idx = 0;
-        for (Tablet tablet : tablets) {
+        for (Tablet tablet : snapshot) {
             if (tablet.getId() == tabletId) {
                 return idx;
             }
@@ -280,15 +303,16 @@ public class MaterializedIndex extends MetaObject implements Writable, GsonPostP
 
     @Override
     public String toString() {
+        List<Tablet> snapshot = tablets;
         StringBuilder buffer = new StringBuilder();
         buffer.append("index id: ").append(id).append("; ");
         buffer.append("index state: ").append(state.name()).append("; ");
 
         buffer.append("row count: ").append(rowCount).append("; ");
-        buffer.append("tablets size: ").append(tablets.size()).append("; ");
+        buffer.append("tablets size: ").append(snapshot.size()).append("; ");
         //
         buffer.append("tablets: [");
-        for (Tablet tablet : tablets) {
+        for (Tablet tablet : snapshot) {
             buffer.append("tablet: ").append(tablet.toString()).append(", ");
         }
         buffer.append("]; ");
@@ -302,8 +326,10 @@ public class MaterializedIndex extends MetaObject implements Writable, GsonPostP
     @Override
     public void gsonPostProcess() {
         // build "idToTablets" from "tablets"
+        Map<Long, Tablet> map = new HashMap<>(tablets.size());
         for (Tablet tablet : tablets) {
-            idToTablets.put(tablet.getId(), tablet);
+            map.put(tablet.getId(), tablet);
         }
+        idToTablets = map;
     }
 }

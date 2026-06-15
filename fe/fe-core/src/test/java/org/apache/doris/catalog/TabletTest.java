@@ -35,6 +35,9 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class TabletTest {
 
@@ -124,6 +127,71 @@ public class TabletTest {
         // clear replicas
         tablet.clearReplica();
         Assert.assertEquals(0, tablet.getReplicas().size());
+    }
+
+    @Test
+    public void testGetReplicasReturnsImmutableSnapshot() {
+        List<Replica> snapshot = tablet.getReplicas();
+        Assert.assertEquals(3, snapshot.size());
+
+        Replica replica4 = new Replica(4L, 4L, 100L, 0, 200000L, 0, 3000L, ReplicaState.NORMAL, 0, 0);
+        tablet.addReplica(replica4);
+        Assert.assertEquals(3, snapshot.size());
+        Assert.assertEquals(4, tablet.getReplicas().size());
+        Assert.assertThrows(UnsupportedOperationException.class, () -> snapshot.add(replica4));
+    }
+
+    @Test
+    public void testIterateReplicasWhileMutatingDoesNotThrow() {
+        int seen = 0;
+        for (Replica replica : tablet.getReplicas()) {
+            Assert.assertNotNull(replica);
+            tablet.addReplica(new Replica(100L + seen, 100L + seen, 100L, 0, 200000L, 0, 3000L,
+                    ReplicaState.NORMAL, 0, 0));
+            tablet.deleteReplicaByBackendId(2L);
+            seen++;
+        }
+        Assert.assertEquals(3, seen);
+    }
+
+    @Test
+    public void testConcurrentGetReplicasNeverThrows() throws InterruptedException {
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        AtomicBoolean stop = new AtomicBoolean(false);
+
+        Thread writer = new Thread(() -> {
+            long id = 1000L;
+            while (!stop.get()) {
+                long beId = id % 8;
+                tablet.addReplica(new Replica(id, beId, 100L, 0, 200000L, 0, 3000L,
+                        ReplicaState.NORMAL, 0, 0), true);
+                id++;
+            }
+        });
+
+        Thread reader = new Thread(() -> {
+            try {
+                for (int i = 0; i < 50000 && error.get() == null; i++) {
+                    for (Replica replica : tablet.getReplicas()) {
+                        replica.getId();
+                    }
+                }
+            } catch (Throwable t) {
+                error.set(t);
+            } finally {
+                stop.set(true);
+            }
+        });
+
+        writer.start();
+        reader.start();
+        reader.join();
+        stop.set(true);
+        writer.join();
+
+        if (error.get() != null) {
+            Assert.fail("getReplicas() iteration threw under concurrent mutation: " + error.get());
+        }
     }
 
     @Test

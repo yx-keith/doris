@@ -48,7 +48,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -114,7 +113,7 @@ public class Tablet extends MetaObject implements Writable {
     @SerializedName(value = "id")
     private long id;
     @SerializedName(value = "replicas")
-    private List<Replica> replicas;
+    private volatile List<Replica> replicas;
     @SerializedName(value = "checkedVersion")
     private long checkedVersion;
     @Deprecated
@@ -208,27 +207,48 @@ public class Tablet extends MetaObject implements Writable {
         }
     }
 
-    private boolean deleteRedundantReplica(long backendId, long version) {
-        boolean delete = false;
+    private synchronized boolean deleteRedundantReplica(long backendId, long version) {
         boolean hasBackend = false;
-        Iterator<Replica> iterator = replicas.iterator();
-        while (iterator.hasNext()) {
-            Replica replica = iterator.next();
+        boolean deletedOld = false;
+        List<Replica> current = replicas;
+        List<Replica> next = new ArrayList<>(current.size());
+        for (Replica replica : current) {
             if (replica.getBackendId() == backendId) {
                 hasBackend = true;
                 if (replica.getVersion() <= version) {
-                    iterator.remove();
-                    delete = true;
+                    deletedOld = true;
+                    continue;
                 }
             }
+            next.add(replica);
         }
 
-        return delete || !hasBackend;
+        if (deletedOld) {
+            replicas = next;
+        }
+        return deletedOld || !hasBackend;
     }
 
-    public void addReplica(Replica replica, boolean isRestore) {
-        if (deleteRedundantReplica(replica.getBackendId(), replica.getVersion())) {
-            replicas.add(replica);
+    public synchronized void addReplica(Replica replica, boolean isRestore) {
+        long backendId = replica.getBackendId();
+        long version = replica.getVersion();
+        boolean hasBackend = false;
+        boolean deletedOld = false;
+        List<Replica> current = replicas;
+        List<Replica> next = new ArrayList<>(current.size() + 1);
+        for (Replica currentReplica : current) {
+            if (currentReplica.getBackendId() == backendId) {
+                hasBackend = true;
+                if (currentReplica.getVersion() <= version) {
+                    deletedOld = true;
+                    continue;
+                }
+            }
+            next.add(currentReplica);
+        }
+        if (deletedOld || !hasBackend) {
+            next.add(replica);
+            replicas = next;
             if (!isRestore) {
                 Env.getCurrentInvertedIndex().addReplica(id, replica);
             }
@@ -240,7 +260,7 @@ public class Tablet extends MetaObject implements Writable {
     }
 
     public List<Replica> getReplicas() {
-        return this.replicas;
+        return Collections.unmodifiableList(replicas);
     }
 
     public Set<Long> getBackendIds() {
@@ -380,46 +400,60 @@ public class Tablet extends MetaObject implements Writable {
         return null;
     }
 
-    public boolean deleteReplica(Replica replica) {
-        if (replicas.contains(replica)) {
-            replicas.remove(replica);
+    public synchronized boolean deleteReplica(Replica replica) {
+        List<Replica> current = replicas;
+        if (current.contains(replica)) {
+            List<Replica> next = new ArrayList<>(current);
+            next.remove(replica);
+            replicas = next;
             Env.getCurrentInvertedIndex().deleteReplica(id, replica.getBackendId());
             return true;
         }
         return false;
     }
 
-    public boolean deleteReplicaByBackendId(long backendId) {
-        Iterator<Replica> iterator = replicas.iterator();
-        while (iterator.hasNext()) {
-            Replica replica = iterator.next();
+    public synchronized boolean deleteReplicaByBackendId(long backendId) {
+        List<Replica> current = replicas;
+        List<Replica> next = new ArrayList<>(current.size());
+        boolean found = false;
+        for (Replica replica : current) {
             if (replica.getBackendId() == backendId) {
-                iterator.remove();
-                Env.getCurrentInvertedIndex().deleteReplica(id, backendId);
-                return true;
+                found = true;
+            } else {
+                next.add(replica);
             }
+        }
+        if (found) {
+            replicas = next;
+            Env.getCurrentInvertedIndex().deleteReplica(id, backendId);
+            return true;
         }
         return false;
     }
 
     @Deprecated
-    public Replica deleteReplicaById(long replicaId) {
-        Iterator<Replica> iterator = replicas.iterator();
-        while (iterator.hasNext()) {
-            Replica replica = iterator.next();
+    public synchronized Replica deleteReplicaById(long replicaId) {
+        List<Replica> current = replicas;
+        List<Replica> next = new ArrayList<>(current.size());
+        Replica deletedReplica = null;
+        for (Replica replica : current) {
             if (replica.getId() == replicaId) {
                 LOG.info("delete replica[" + replica.getId() + "]");
-                iterator.remove();
-                return replica;
+                deletedReplica = replica;
+            } else {
+                next.add(replica);
             }
         }
-        return null;
+        if (deletedReplica != null) {
+            replicas = next;
+        }
+        return deletedReplica;
     }
 
     // for test,
     // and for some replay cases
-    public void clearReplica() {
-        this.replicas.clear();
+    public synchronized void clearReplica() {
+        this.replicas = new ArrayList<>();
     }
 
     public void setTabletId(long tabletId) {
@@ -482,13 +516,15 @@ public class Tablet extends MetaObject implements Writable {
 
         Tablet tablet = (Tablet) obj;
 
-        if (replicas != tablet.replicas) {
-            if (replicas.size() != tablet.replicas.size()) {
+        List<Replica> thisReplicas = replicas;
+        List<Replica> otherReplicas = tablet.replicas;
+        if (thisReplicas != otherReplicas) {
+            if (thisReplicas.size() != otherReplicas.size()) {
                 return false;
             }
-            int size = replicas.size();
+            int size = thisReplicas.size();
             for (int i = 0; i < size; i++) {
-                if (!tablet.replicas.contains(replicas.get(i))) {
+                if (!otherReplicas.contains(thisReplicas.get(i))) {
                     return false;
                 }
             }
