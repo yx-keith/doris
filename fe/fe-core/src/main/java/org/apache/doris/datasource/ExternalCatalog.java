@@ -532,27 +532,38 @@ public abstract class ExternalCatalog
      * @param invalidCache if {@code true}, the catalog cache will be invalidated
      *                     and reloaded during the refresh process.
      */
-    public synchronized void resetToUninitialized(boolean invalidCache) {
-        this.objectCreated = false;
-        this.initialized = false;
-        synchronized (this.propLock) {
-            this.convertedProperties = null;
+    public void resetToUninitialized(boolean invalidCache) {
+        synchronized (this) {
+            this.objectCreated = false;
+            this.initialized = false;
+            synchronized (this.propLock) {
+                this.convertedProperties = null;
+            }
+
+            synchronized (this.confLock) {
+                this.cachedConf = null;
+            }
+            onClose();
         }
 
-        synchronized (this.confLock) {
-            this.cachedConf = null;
-        }
-        onClose();
-
-        refreshOnlyCatalogCache(invalidCache);
+        onRefreshCache(invalidCache);
     }
 
     public void onRefreshCache(boolean invalidCache) {
-        this.initialized = false;
-        refreshOnlyCatalogCache(invalidCache);
+        setLastUpdateTime(System.currentTimeMillis());
+        refreshMetaCacheOnly(invalidCache);
+
+        this.invalidCacheInInit = invalidCache;
+        if (invalidCache) {
+            Env.getCurrentEnv().getExtMetaCacheMgr().invalidateCatalogCache(id);
+        }
     }
 
-    private void refreshOnlyCatalogCache(boolean invalidCache) {
+    /**
+     * Refresh meta cache only (database level cache), without invalidating catalog level cache.
+     * This method is safe to call within synchronized block.
+     */
+    private void refreshMetaCacheOnly(boolean invalidCache) {
         if (useMetaCache.isPresent()) {
             if (useMetaCache.get() && metaCache != null) {
                 metaCache.invalidateAll();
@@ -562,10 +573,6 @@ public abstract class ExternalCatalog
                     db.setUnInitialized(invalidCache);
                 }
             }
-        }
-        this.invalidCacheInInit = invalidCache;
-        if (invalidCache) {
-            Env.getCurrentEnv().getExtMetaCacheMgr().invalidateCatalogCache(id);
         }
     }
 
