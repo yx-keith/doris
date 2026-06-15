@@ -128,11 +128,13 @@ private:
 class JniUtfCharGuard {
 public:
     /// Construct a JniUtfCharGuards holding nothing
-    JniUtfCharGuard() : utf_chars(nullptr) {}
+    JniUtfCharGuard() = default;
 
     /// Release the held char sequence if there is one.
     ~JniUtfCharGuard() {
-        if (utf_chars != nullptr) env->ReleaseStringUTFChars(jstr, utf_chars);
+        if (utf_chars != nullptr) {
+            env->ReleaseStringUTFChars(jstr, utf_chars);
+        }
     }
 
     /// Try to get chars from jstr. If error is returned, utf_chars and get() remain
@@ -145,7 +147,7 @@ public:
 
 private:
     JNIEnv* env = nullptr;
-    jstring jstr;
+    jstring jstr = nullptr;
     const char* utf_chars = nullptr;
     DISALLOW_COPY_AND_ASSIGN(JniUtfCharGuard);
 };

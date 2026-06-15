@@ -612,7 +612,7 @@ public:
         case TYPE_LARGEINT: {
             batch_assign(in_filter, [](std::shared_ptr<HybridSetBase>& set, PColumnValue& column,
                                        ObjectPool* pool) {
-                auto string_val = column.stringval();
+                const std::string& string_val = column.stringval();
                 StringParser::ParseResult result;
                 int128_t int128_val = StringParser::string_to_int<int128_t>(
                         string_val.c_str(), string_val.length(), &result);
@@ -692,7 +692,7 @@ public:
         case TYPE_DECIMAL128I: {
             batch_assign(in_filter, [](std::shared_ptr<HybridSetBase>& set, PColumnValue& column,
                                        ObjectPool* pool) {
-                auto string_val = column.stringval();
+                const std::string& string_val = column.stringval();
                 StringParser::ParseResult result;
                 int128_t int128_val = StringParser::string_to_int<int128_t>(
                         string_val.c_str(), string_val.length(), &result);
@@ -704,7 +704,7 @@ public:
         case TYPE_DECIMAL256: {
             batch_assign(in_filter, [](std::shared_ptr<HybridSetBase>& set, PColumnValue& column,
                                        ObjectPool* pool) {
-                auto string_val = column.stringval();
+                const std::string& string_val = column.stringval();
                 StringParser::ParseResult result;
                 auto int_val = StringParser::string_to_int<wide::Int256>(
                         string_val.c_str(), string_val.length(), &result);
@@ -736,7 +736,7 @@ public:
         case TYPE_IPV6: {
             batch_assign(in_filter, [](std::shared_ptr<HybridSetBase>& set, PColumnValue& column,
                                        ObjectPool* pool) {
-                auto string_val = column.stringval();
+                const std::string& string_val = column.stringval();
                 StringParser::ParseResult result;
                 auto int128_val = StringParser::string_to_int<uint128_t>(
                         string_val.c_str(), string_val.length(), &result);

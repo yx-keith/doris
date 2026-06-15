@@ -136,7 +136,7 @@ T try_any_cast(const std::any& a) {
     return std::any_cast<T>(a);
   } catch (const std::bad_any_cast& e) { 
     std::cerr << e.what() << " expected=" << typeid(T).name() << " actual=" << a.type().name() << std::endl;
-    throw e;
+    throw;
   }
 }
 

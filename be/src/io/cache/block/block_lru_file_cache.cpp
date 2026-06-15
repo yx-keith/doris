@@ -787,7 +787,7 @@ bool LRUFileCache::try_reserve_for_lru(const Key& key, QueryFileCacheContextPtr 
             }
         };
 
-        if (evict_num > config::file_cache_max_evict_num_per_round) {
+        if (evict_num > static_cast<size_t>(config::file_cache_max_evict_num_per_round)) {
             LOG(INFO) << "debug evict from file cache number: " << evict_num;
         }
         std::for_each(trash.begin(), trash.end(), remove_file_block_if);

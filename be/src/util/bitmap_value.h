@@ -305,7 +305,7 @@ public:
     /**
      * Exchange the content of this bitmap with another.
      */
-    void swap(Roaring64Map& r) { roarings.swap(r.roarings); }
+    void swap(Roaring64Map& r) noexcept { roarings.swap(r.roarings); }
 
     /**
      * Get the cardinality of the bitmap (number of elements).

@@ -816,7 +816,7 @@ Status BetaRowset::show_nested_index_file(rapidjson::Value* rowset_value,
                 }
                 rapidjson::Value index(rapidjson::kObjectType);
                 auto index_id = index_meta->index_id();
-                auto index_suffix = index_meta->get_index_suffix();
+                const std::string& index_suffix = index_meta->get_index_suffix();
                 index.AddMember("index_id", rapidjson::Value(index_id).Move(), allocator);
                 index.AddMember("index_suffix", rapidjson::Value(index_suffix.c_str(), allocator),
                                 allocator);

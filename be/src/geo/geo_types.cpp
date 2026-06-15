@@ -1621,9 +1621,7 @@ bool GeoShape::ComputeArea(GeoShape* rhs, double* area, std::string square_unit)
 
 std::string GeoShape::as_binary(GeoShape* rhs) {
     std::string res;
-    if (toBinary::geo_tobinary(rhs, &res)) {
-        return res;
-    }
+    std::ignore = toBinary::geo_tobinary(rhs, &res);
     return res;
 }
 

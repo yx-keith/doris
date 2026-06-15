@@ -1252,7 +1252,7 @@ Status SchemaChangeHandler::_parse_request(const SchemaChangeParams& sc_params,
 
         if (sc_params.alter_tablet_type == ROLLUP) {
             std::string materialized_function_map_str;
-            for (auto str : materialized_function_map) {
+            for (const auto& str : materialized_function_map) {
                 if (!materialized_function_map_str.empty()) {
                     materialized_function_map_str += ',';
                 }

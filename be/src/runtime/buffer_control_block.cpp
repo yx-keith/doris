@@ -136,18 +136,19 @@ void GetArrowResultBatchCtx::on_data(
             result->set_packet_seq(packet_seq);
             LOG(WARNING) << "TFetchDataResult serialize failed, errmsg=" << st;
         }
-    } else {
-        result->set_empty_batch(true);
-        result->set_packet_seq(packet_seq);
-        result->set_eos(false);
-    }
+        // } else {
+        //     result->set_empty_batch(true);
+        //     result->set_packet_seq(packet_seq);
+        //     result->set_eos(false);
+        // }
 
-    /// The size limit of proto buffer message is 2G
-    if (result->ByteSizeLong() > std::numeric_limits<int32_t>::max()) {
-        st = Status::InternalError("Message size exceeds 2GB: {}", result->ByteSizeLong());
-        result->clear_block();
+        /// The size limit of proto buffer message is 2G
+        if (result->ByteSizeLong() > std::numeric_limits<int32_t>::max()) {
+            st = Status::InternalError("Message size exceeds 2GB: {}", result->ByteSizeLong());
+            result->clear_block();
+        }
+        st.to_protobuf(result->mutable_status());
     }
-    st.to_protobuf(result->mutable_status());
     delete this;
 }
 

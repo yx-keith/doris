@@ -34,8 +34,8 @@ void PrefixQuery::get_prefix_terms(IndexReader* reader, const std::wstring& fiel
         const TCHAR* prefixText = prefix_term->text();
         const TCHAR* prefixField = prefix_term->field();
         const TCHAR* tmp = nullptr;
-        size_t i = 0;
-        size_t prefixLen = prefix_term->textLength();
+        int i = 0;
+        int prefixLen = prefix_term->textLength();
         do {
             lastTerm = enumerator->term();
             if (lastTerm != nullptr && lastTerm->field() == prefixField) {

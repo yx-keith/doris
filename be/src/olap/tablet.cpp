@@ -1299,12 +1299,12 @@ void Tablet::calculate_cumulative_point() {
 void Tablet::delete_all_files() {
     // Release resources like memory and disk space.
     std::shared_lock rdlock(_meta_lock);
-    for (auto it : _rs_version_map) {
+    for (auto& it : _rs_version_map) {
         static_cast<void>(it.second->remove());
     }
     _rs_version_map.clear();
 
-    for (auto it : _stale_rs_version_map) {
+    for (auto& it : _stale_rs_version_map) {
         static_cast<void>(it.second->remove());
     }
     _stale_rs_version_map.clear();
@@ -3402,8 +3402,8 @@ Status Tablet::read_columns_by_plan(TabletSchemaSPtr tablet_schema,
     bool has_row_column = tablet_schema->store_row_column();
     auto mutable_columns = block.mutate_columns();
     size_t read_idx = 0;
-    for (auto rs_it : read_plan) {
-        for (auto seg_it : rs_it.second) {
+    for (const auto& rs_it : read_plan) {
+        for (const auto& seg_it : rs_it.second) {
             auto rowset_iter = rsid_to_rowset.find(rs_it.first);
             CHECK(rowset_iter != rsid_to_rowset.end());
             std::vector<uint32_t> rids;
@@ -3803,13 +3803,13 @@ Status Tablet::check_rowid_conversion(
     std::unordered_map<RowsetId, std::vector<segment_v2::SegmentSharedPtr>> input_rowsets_segment;
 
     VLOG_DEBUG << "check_rowid_conversion, dst_segments size: " << dst_segments.size();
-    for (auto [src_rowset, locations] : location_map) {
+    for (const auto& [src_rowset, locations] : location_map) {
         std::vector<segment_v2::SegmentSharedPtr>& segments =
                 input_rowsets_segment[src_rowset->rowset_id()];
         if (segments.empty()) {
             RETURN_IF_ERROR(_load_rowset_segments(src_rowset, &segments));
         }
-        for (auto& [src, dst] : locations) {
+        for (const auto& [src, dst] : locations) {
             std::string src_key;
             std::string dst_key;
             Status s = segments[src.segment_id]->read_key_by_rowid(src.row_id, &src_key);

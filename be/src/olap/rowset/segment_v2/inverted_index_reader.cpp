@@ -1224,7 +1224,7 @@ Status InvertedIndexIterator::read_from_inverted_index(
                               bit_map);
     };
 
-    if (_runtime_state->query_options().enable_profile) {
+    if (_runtime_state && _runtime_state->query_options().enable_profile) {
         InvertedIndexQueryStatistics query_stats;
         {
             SCOPED_RAW_TIMER(&query_stats.exec_time);

@@ -447,7 +447,7 @@ public:
       */
     Field(const Field& rhs) { create(rhs); }
 
-    Field(Field&& rhs) { create(std::move(rhs)); }
+    Field(Field&& rhs) noexcept { create(std::move(rhs)); }
 
     // Make the constructor with a String parameter explicit to prevent accidentally creating a Field with the wrong string type.
     // Other types don't require explicit construction to avoid extensive modifications.
@@ -472,7 +472,7 @@ public:
                which == Types::VariantMap;
     }
 
-    Field& operator=(Field&& rhs) {
+    Field& operator=(Field&& rhs) noexcept {
         if (this != &rhs) {
             if (which != rhs.which) {
                 destroy();

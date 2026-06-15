@@ -389,7 +389,7 @@ public:
     constexpr static inline uint64_t TEMP_VERSION_COMMON = 0;
 
     /**
-     * 
+     *
      * @param tablet_id the tablet which this delete bitmap associates with
      */
     DeleteBitmap(int64_t tablet_id);
@@ -402,8 +402,8 @@ public:
     /**
      * Move c-tor for making delete bitmap snapshot on read path
      */
-    DeleteBitmap(DeleteBitmap&& r);
-    DeleteBitmap& operator=(DeleteBitmap&& r);
+    DeleteBitmap(DeleteBitmap&& r) noexcept;
+    DeleteBitmap& operator=(DeleteBitmap&& r) noexcept;
 
     /**
      * Makes a snapshot of delete bitmap, read lock will be acquired in this

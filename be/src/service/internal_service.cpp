@@ -478,6 +478,7 @@ void PInternalServiceImpl::tablet_writer_add_block_by_http(
         tablet_writer_add_block(controller, new_request, response, new_done);
     } else {
         st.to_protobuf(response->mutable_status());
+        delete new_done;
     }
 }
 

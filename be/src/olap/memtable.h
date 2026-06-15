@@ -109,8 +109,8 @@ public:
     private:
         Tie& _tie;
         size_t _left;
-        size_t _right;
-        size_t _next;
+        size_t _right = 0;
+        size_t _next = 0;
     };
 
 public:

@@ -17,6 +17,7 @@
 
 package org.apache.doris.backup;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -29,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 
 public class AsynchronousCmdExecutor<V> {
     private static final Logger LOG = LogManager.getLogger(AsynchronousCmdExecutor.class);
+    private static final String ASYNC_CMD_EXECUTOR_NAME = "aysnchronous-cmd-executor";
     private final BlockingQueue<Runnable> waitingQueue;
     private final ThreadPoolExecutor pool;
 
@@ -36,7 +38,8 @@ public class AsynchronousCmdExecutor<V> {
         waitingQueue = new LinkedBlockingQueue<Runnable>();
         // same as Executors.newSingleThreadExecutor()
         // use this to help monitoring queue size
-        pool = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, waitingQueue);
+        pool = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, waitingQueue,
+                new ThreadFactoryBuilder().setNameFormat(ASYNC_CMD_EXECUTOR_NAME).build());
     }
 
     public Future<V> submit(Callable<V> task) {

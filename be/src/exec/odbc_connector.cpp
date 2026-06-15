@@ -20,8 +20,8 @@
 #include <glog/logging.h>
 #include <sql.h>
 #include <sqlext.h>
-#include <wchar.h>
 
+#include <cstring>
 #include <ostream>
 
 #include "common/status.h"
@@ -301,8 +301,8 @@ std::string ODBCConnector::handle_diagnostic_record(SQLHANDLE hHandle, SQLSMALLI
                                                     RETCODE RetCode) {
     SQLSMALLINT rec = 0;
     SQLINTEGER error;
-    CHAR message[1000];
-    CHAR state[SQL_SQLSTATE_SIZE + 1];
+    SQLCHAR message[1000];
+    SQLCHAR state[SQL_SQLSTATE_SIZE + 1];
 
     if (RetCode == SQL_INVALID_HANDLE) {
         return "Invalid handle!";
@@ -311,12 +311,13 @@ std::string ODBCConnector::handle_diagnostic_record(SQLHANDLE hHandle, SQLSMALLI
     std::string diagnostic_msg;
 
     while (SQLGetDiagRec(hType, hHandle, ++rec, (SQLCHAR*)(state), &error,
-                         reinterpret_cast<SQLCHAR*>(message),
-                         (SQLSMALLINT)(sizeof(message) / sizeof(WCHAR)),
+                         message, static_cast<SQLSMALLINT>(sizeof(message)),
                          (SQLSMALLINT*)nullptr) == SQL_SUCCESS) {
         // Hide data truncated..
-        if (wcsncmp(reinterpret_cast<const wchar_t*>(state), L"01004", 5)) {
-            diagnostic_msg += fmt::format("{} {} ({})", state, message, error);
+        const auto* state_str = reinterpret_cast<const char*>(state);
+        const auto* message_str = reinterpret_cast<const char*>(message);
+        if (std::strncmp(state_str, "01004", SQL_SQLSTATE_SIZE) != 0) {
+            diagnostic_msg += fmt::format("{} {} ({})", state_str, message_str, error);
         }
     }
 

@@ -454,7 +454,7 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req,
     if (!http_req->header(HTTP_LINE_DELIMITER).empty()) {
         request.__set_line_delimiter(http_req->header(HTTP_LINE_DELIMITER));
     }
-    if (!http_req->header(HTTP_ENCLOSE).empty() && !http_req->header(HTTP_ENCLOSE).empty()) {
+    if (!http_req->header(HTTP_ENCLOSE).empty()) {
         const auto& enclose_str = http_req->header(HTTP_ENCLOSE);
         if (enclose_str.length() != 1) {
             return Status::InvalidArgument("enclose must be single-char, actually is {}",
@@ -462,7 +462,7 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req,
         }
         request.__set_enclose(http_req->header(HTTP_ENCLOSE)[0]);
     }
-    if (!http_req->header(HTTP_ESCAPE).empty() && !http_req->header(HTTP_ESCAPE).empty()) {
+    if (!http_req->header(HTTP_ESCAPE).empty()) {
         const auto& escape_str = http_req->header(HTTP_ESCAPE);
         if (escape_str.length() != 1) {
             return Status::InvalidArgument("escape must be single-char, actually is {}",

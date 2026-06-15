@@ -644,8 +644,7 @@ void SystemMetrics::_update_net_metrics() {
     }
 
     // Ignore header
-    if (getline(&_line_ptr, &_line_buf_size, fp) < 0 ||
-        getline(&_line_ptr, &_line_buf_size, fp) < 0) {
+    if (getline(&_line_ptr, &_line_buf_size, fp) < 0) {
         char buf[64];
         LOG(WARNING) << "read /proc/net/dev first two line failed, errno=" << errno
                      << ", message=" << strerror_r(errno, buf, 64);

@@ -998,12 +998,12 @@ DeleteBitmap& DeleteBitmap::operator=(const DeleteBitmap& o) {
     return *this;
 }
 
-DeleteBitmap::DeleteBitmap(DeleteBitmap&& o) {
+DeleteBitmap::DeleteBitmap(DeleteBitmap&& o) noexcept {
     delete_bitmap = std::move(o.delete_bitmap);
     _tablet_id = o._tablet_id;
 }
 
-DeleteBitmap& DeleteBitmap::operator=(DeleteBitmap&& o) {
+DeleteBitmap& DeleteBitmap::operator=(DeleteBitmap&& o) noexcept {
     delete_bitmap = std::move(o.delete_bitmap);
     _tablet_id = o._tablet_id;
     return *this;

@@ -103,9 +103,8 @@ public class LimitInputStream extends InputStream {
             if (bytesRead == -1 && ioe != null) {
                 throw ioe;
             }
-            return bytesRead;
         }
-
+        return bytesRead;
     }
 
     byte[] oneByte = new byte[1];

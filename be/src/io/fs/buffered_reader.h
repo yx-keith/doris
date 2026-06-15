@@ -429,7 +429,7 @@ struct PrefetchBuffer : std::enable_shared_from_this<PrefetchBuffer>, public Pro
               _buf(new char[buffer_size]),
               _sync_profile(std::move(sync_profile)) {}
 
-    PrefetchBuffer(PrefetchBuffer&& other)
+    PrefetchBuffer(PrefetchBuffer&& other) noexcept
             : _offset(other._offset),
               _file_range(other._file_range),
               _random_access_ranges(other._random_access_ranges),

@@ -206,9 +206,10 @@ private:
                 }
             }
         }
-        if (!writer_.writeEndArray()) {
-            return error;
-        }
+        writer_.writeEndArray();
+        // if (!writer_.writeEndArray()) {
+        //     return error;
+        // }
 
         return error;
     }

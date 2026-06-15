@@ -106,7 +106,7 @@ void Rowset::merge_rowset_meta(const RowsetMetaSharedPtr& other) {
     _rowset_meta->set_index_disk_size(index_disk_size() + other->index_disk_size());
     std::vector<KeyBoundsPB> key_bounds;
     other->get_segments_key_bounds(&key_bounds);
-    for (auto key_bound : key_bounds) {
+    for (auto& key_bound : key_bounds) {
         _rowset_meta->add_segment_key_bounds(key_bound);
     }
 

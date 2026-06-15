@@ -259,7 +259,7 @@ public:
         return *this;
     }
 
-    VExprContext& operator=(VExprContext&& other) {
+    VExprContext& operator=(VExprContext&& other) noexcept {
         _root = other._root;
         other._root = nullptr;
         _is_clone = other._is_clone;

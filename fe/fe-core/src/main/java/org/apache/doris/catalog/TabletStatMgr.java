@@ -189,7 +189,7 @@ public class TabletStatMgr extends MasterDaemon {
                                 tableRemoteDataSize += tabletRemoteDataSize;
 
                                 // When all BEs are down, avoid set Long.MAX_VALUE to index and table row count. Use 0.
-                                if (tabletRowCount == Long.MAX_VALUE) {
+                                if (Long.valueOf(Long.MAX_VALUE).equals(tabletRowCount)) {
                                     tabletRowCount = 0L;
                                 }
                                 tableRowCount += tabletRowCount;

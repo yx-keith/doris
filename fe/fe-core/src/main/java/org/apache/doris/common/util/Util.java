@@ -326,6 +326,7 @@ public class Util {
             int readTimeoutMs) {
         StringBuilder sb = new StringBuilder();
         InputStream stream = null;
+        boolean closeFailed = false;
         try {
             URL url = new URL(urlStr);
             URLConnection conn = url.openConnection();
@@ -351,9 +352,12 @@ public class Util {
                     stream.close();
                 } catch (IOException e) {
                     LOG.warn("failed to close stream when get result from url: {}", urlStr, e);
-                    return null;
+                    closeFailed = true;
                 }
             }
+        }
+        if (closeFailed) {
+            return null;
         }
         if (LOG.isDebugEnabled()) {
             LOG.debug("get result from url {}: {}", urlStr, sb.toString());

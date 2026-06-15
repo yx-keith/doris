@@ -526,7 +526,7 @@ struct Decimal {
     static constexpr bool IsInt256 = std::is_same_v<T, wide::Int256>;
 
     Decimal() = default;
-    Decimal(Decimal<T>&&) = default;
+    Decimal(Decimal<T>&&) noexcept = default;
     Decimal(const Decimal<T>&) = default;
 
     explicit(IsInt256) Decimal(Int32 value) noexcept : value(value) {}
@@ -567,7 +567,7 @@ struct Decimal {
         }
     }
 
-    constexpr Decimal<T>& operator=(Decimal<T>&&) = default;
+    constexpr Decimal<T>& operator=(Decimal<T>&&) noexcept = default;
     constexpr Decimal<T>& operator=(const Decimal<T>&) = default;
 
     operator T() const { return value; }

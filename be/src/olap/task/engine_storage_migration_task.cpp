@@ -324,9 +324,9 @@ Status EngineStorageMigrationTask::_migrate() {
             break;
         }
         res = _reload_tablet(full_path);
-        if (!res.ok()) {
-            break;
-        }
+        // if (!res.ok()) {
+        //     break;
+        // }
 
         break;
     } while (true);

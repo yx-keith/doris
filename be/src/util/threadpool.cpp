@@ -215,16 +215,12 @@ const char* ThreadPoolToken::state_to_string(State s) {
     switch (s) {
     case State::IDLE:
         return "IDLE";
-        break;
     case State::RUNNING:
         return "RUNNING";
-        break;
     case State::QUIESCING:
         return "QUIESCING";
-        break;
     case State::QUIESCED:
         return "QUIESCED";
-        break;
     }
     return "<cannot reach here>";
 }

@@ -17,6 +17,7 @@
 
 package org.apache.doris.common.lock;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,8 +25,8 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.util.Arrays;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -43,7 +44,8 @@ public class DeadlockMonitor {
 
     public DeadlockMonitor() {
         this.threadMXBean = ManagementFactory.getThreadMXBean();
-        this.scheduler = Executors.newScheduledThreadPool(1);
+        this.scheduler = new ScheduledThreadPoolExecutor(1,
+                new ThreadFactoryBuilder().setDaemon(true).setNameFormat("deadlock-monitor").build());
     }
 
     /**

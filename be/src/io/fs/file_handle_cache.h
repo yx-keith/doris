@@ -128,8 +128,8 @@ public:
     public:
         Accessor();
         Accessor(FileHandleCachePartition::CacheType::Accessor&& cache_accessor);
-        Accessor(Accessor&&) = default;
-        Accessor& operator=(Accessor&&) = default;
+        Accessor(Accessor&&) noexcept = default;
+        Accessor& operator=(Accessor&&) noexcept = default;
 
         DISALLOW_COPY_AND_ASSIGN(Accessor);
 

@@ -92,6 +92,6 @@ bool LoadUtil::is_format_support_streaming(TFileFormatType::type format) {
     default:
         return false;
     }
-    return false;
+    // return false;
 }
 } // namespace  doris

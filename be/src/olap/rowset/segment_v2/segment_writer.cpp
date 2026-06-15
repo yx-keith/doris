@@ -676,8 +676,8 @@ Status SegmentWriter::fill_missing_columns(vectorized::MutableColumns& mutable_f
     // record real pos, key is input line num, value is old_block line num
     std::map<uint32_t, uint32_t> read_index;
     size_t read_idx = 0;
-    for (auto rs_it : _rssid_to_rid) {
-        for (auto seg_it : rs_it.second) {
+    for (auto& rs_it : _rssid_to_rid) {
+        for (auto& seg_it : rs_it.second) {
             auto rowset = _rsid_to_rowset[rs_it.first];
             CHECK(rowset);
             std::vector<uint32_t> rids;

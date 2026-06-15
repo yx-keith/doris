@@ -287,7 +287,7 @@ void OlapTableSchemaParam::to_protobuf(POlapTableSchemaParam* pschema) const {
     pschema->set_timestamp_ms(_timestamp_ms);
     pschema->set_timezone(_timezone);
     pschema->set_nano_seconds(_nano_seconds);
-    for (auto col : _partial_update_input_columns) {
+    for (const std::string& col : _partial_update_input_columns) {
         *pschema->add_partial_update_input_columns() = col;
     }
     _tuple_desc->to_protobuf(pschema->mutable_tuple_desc());

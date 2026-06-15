@@ -28,6 +28,7 @@ import com.google.common.collect.Lists;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Combination of expr and ASC/DESC, and nulls ordering.
@@ -194,7 +195,7 @@ public class OrderByElement {
         }
 
         OrderByElement o = (OrderByElement) obj;
-        return expr.equals(o.expr) && isAsc == o.isAsc  && nullsFirstParam == o.nullsFirstParam;
+        return expr.equals(o.expr) && isAsc == o.isAsc && Objects.equals(nullsFirstParam, o.nullsFirstParam);
     }
 
     /**

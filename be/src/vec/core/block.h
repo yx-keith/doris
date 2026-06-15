@@ -440,7 +440,7 @@ public:
         initialize_index_by_name();
     }
 
-    void operator=(MutableBlock&& m_block) {
+    void operator=(MutableBlock&& m_block) noexcept {
         _columns = std::move(m_block._columns);
         _data_types = std::move(m_block._data_types);
         _names = std::move(m_block._names);

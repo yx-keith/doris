@@ -84,7 +84,7 @@ struct BlockQueue {
     std::atomic<bool> eos = false;
     moodycamel::ConcurrentQueue<BlockType> data_queue;
     BlockQueue() : eos(false), data_queue(moodycamel::ConcurrentQueue<BlockType>()) {}
-    BlockQueue(BlockQueue<BlockType>&& other)
+    BlockQueue(BlockQueue<BlockType>&& other) noexcept
             : eos(other.eos.load()), data_queue(std::move(other.data_queue)) {}
     inline bool enqueue(BlockType const& item) {
         if (!eos) {

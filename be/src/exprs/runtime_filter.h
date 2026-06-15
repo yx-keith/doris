@@ -116,23 +116,16 @@ static RuntimeFilterType get_runtime_filter_type(const TRuntimeFilterDesc* desc)
 enum class RuntimeFilterRole { PRODUCER = 0, CONSUMER = 1 };
 
 struct RuntimeFilterParams {
-    RuntimeFilterParams()
-            : filter_type(RuntimeFilterType::UNKNOWN_FILTER),
-              bloom_filter_size(-1),
-              max_in_num(0),
-              filter_id(0),
-              bitmap_filter_not_in(false) {}
-
-    RuntimeFilterType filter_type;
+    RuntimeFilterType filter_type = RuntimeFilterType::UNKNOWN_FILTER;
     PrimitiveType column_return_type;
     // used in bloom filter
-    int64_t bloom_filter_size;
-    int32_t max_in_num;
-    int64_t runtime_bloom_filter_min_size;
-    int64_t runtime_bloom_filter_max_size;
-    int32_t filter_id;
-    bool bitmap_filter_not_in;
-    bool build_bf_exactly;
+    int64_t bloom_filter_size = -1;
+    int32_t max_in_num = 0;
+    int64_t runtime_bloom_filter_min_size = 0;
+    int64_t runtime_bloom_filter_max_size = 0;
+    int32_t filter_id = 0;
+    bool bitmap_filter_not_in = false;
+    bool build_bf_exactly = false;
 
     bool bloom_filter_size_calculated_by_ndv = false;
     bool null_aware = false;

@@ -327,7 +327,7 @@ private:
     char* leg_ptr = nullptr;
 
     ///path leg len
-    unsigned int leg_len;
+    unsigned int leg_len = 0;
 
     ///Whether to contain escape characters
     bool has_escapes = false;
