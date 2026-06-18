@@ -29,7 +29,7 @@ suite("test_group_commit_concurrent_insert", "p0") {
 
     def url = getServerPrepareJdbcUrl(context.config.jdbcUrl, dbName)
     url += "&rewriteBatchedStatements=true&cachePrepStmts=true"
-    url += "&sessionVariables=group_commit=async_mode&sessionVariables=enable_nereids_planner=false"
+    url += "&sessionVariables=group_commit=async_mode;enable_nereids_planner=false"
     logger.info("connect url: " + url)
 
     def getRowCount = { fullTable, expectedRowCount ->
@@ -115,8 +115,7 @@ suite("test_group_commit_concurrent_insert", "p0") {
                                 successCount.incrementAndGet()
                             }
                         } catch (Exception e) {
-                            logger.warn("Test1 round=${round} table=${tableIdx} client=${clientId} got exception: " + e.getMessage())
-                            errorCount.incrementAndGet()
+				throw e
                         }
                     })
                     threads.add(th)
@@ -175,8 +174,7 @@ suite("test_group_commit_concurrent_insert", "p0") {
             DUPLICATE KEY(`id`, `name`)
             DISTRIBUTED BY HASH(`id`) BUCKETS 4
             PROPERTIES (
-                "replication_num" = "1",
-                "group_commit_data_bytes" = "100"
+                "replication_num" = "1"
             );
             """
         }
@@ -209,8 +207,7 @@ suite("test_group_commit_concurrent_insert", "p0") {
                             successCount2.incrementAndGet()
                         }
                     } catch (Exception e) {
-                        logger.warn("Test2 table=${tableIdx} client=${clientId} got exception: " + e.getMessage())
-                        errorCount2.incrementAndGet()
+			    throw e
                     }
                 })
                 threads2.add(th)

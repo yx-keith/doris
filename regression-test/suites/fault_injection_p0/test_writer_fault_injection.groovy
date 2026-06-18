@@ -16,7 +16,7 @@
 // under the License.
 
 import org.codehaus.groovy.runtime.IOGroovyMethods
-import org.apache.doris.regression.util.http
+import org.apache.doris.regression.util.Http
 
 suite("test_writer_fault_injection", "nonConcurrent") {
     sql """ set enable_memtable_on_sink_node=false """

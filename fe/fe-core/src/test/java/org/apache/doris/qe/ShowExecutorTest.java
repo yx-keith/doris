@@ -318,6 +318,13 @@ public class ShowExecutorTest {
     @Test
     public void testShowTable() throws AnalysisException {
         ShowTableStmt stmt = new ShowTableStmt("testDb", null, false, null);
+        Analyzer analyzer = AccessTestUtil.fetchAdminAnalyzer(false);
+        try {
+            stmt.analyze(analyzer);
+        } catch (UserException e) {
+            e.printStackTrace();
+            Assert.fail();
+        }
         ShowExecutor executor = new ShowExecutor(ctx, stmt);
         ShowResultSet resultSet = executor.execute();
 
@@ -446,6 +453,13 @@ public class ShowExecutorTest {
     @Test
     public void testShowTableVerbose() throws AnalysisException {
         ShowTableStmt stmt = new ShowTableStmt("testDb", null, true, null);
+        Analyzer analyzer = AccessTestUtil.fetchAdminAnalyzer(false);
+        try {
+            stmt.analyze(analyzer);
+        } catch (UserException e) {
+            e.printStackTrace();
+            Assert.fail();
+        }
         ShowExecutor executor = new ShowExecutor(ctx, stmt);
         ShowResultSet resultSet = executor.execute();
 
