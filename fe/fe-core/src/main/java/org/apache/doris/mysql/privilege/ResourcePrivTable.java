@@ -37,25 +37,12 @@ public class ResourcePrivTable extends PrivTable {
         if (Objects.isNull(entries) || entries.isEmpty()) {
             return;
         }
-        Function<PrivEntry, ResourcePrivEntry> matchFunc = entry -> {
-            try {
-                ResourcePrivEntry resourcePrivEntry = (ResourcePrivEntry) entry;
-
-                // check resource
-                if (!resourcePrivEntry.getResourcePattern().match(resourceName)) {
-                    return null;
-                }
-                return resourcePrivEntry;
-            } catch (Exception e) {
-                LOG.warn("Privilege check failed when invoking getPrivs, resourceName:{}, entry:{}",
-                        resourceName, entry, e);
-                throw new IllegalStateException("Failed to match privilege rule: " + entry, e);
+        for (PrivEntry entry : entries) {
+            ResourcePrivEntry resourcePrivEntry = (ResourcePrivEntry) entry;
+            // check resource
+            if (resourcePrivEntry.getResourcePattern().match(resourceName)) {
+                savedPrivs.or(resourcePrivEntry.getPrivSet());
             }
-        };
-        ResourcePrivEntry matchedEntry = doPrivMatch(entries, matchFunc);
-        // Finally set privilege
-        if (Objects.nonNull(matchedEntry)) {
-            savedPrivs.or(matchedEntry.getPrivSet());
         }
     }
 }
