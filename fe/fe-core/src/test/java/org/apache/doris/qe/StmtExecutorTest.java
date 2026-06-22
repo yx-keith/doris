@@ -910,6 +910,7 @@ public class StmtExecutorTest {
         Mockito.when(mockCtx.getConnectType()).thenReturn(ConnectType.MYSQL);
         Mockito.when(mockCtx.getMysqlChannel()).thenReturn(channel);
         Mockito.when(mockCtx.getState()).thenReturn(queryState);
+        Mockito.when(mockCtx.getSessionVariable()).thenReturn(new SessionVariable());
         Mockito.when(channel.getSerializer()).thenReturn(MysqlSerializer.newInstance());
         Mockito.when(channel.clientDeprecatedEOF()).thenReturn(false);
 
