@@ -136,18 +136,14 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         synchronized (this) {
             this.initialized = false;
             this.invalidCacheInInit = invalidCache;
-            this.lowerCaseToTableName = Maps.newConcurrentMap();
+        }
+        //invalid the table and schema cache without synchronized lock
+        if (invalidCache) {
             if (extCatalog.getUseMetaCache().isPresent()) {
                 if (extCatalog.getUseMetaCache().get() && metaCache != null) {
                     metaCache.invalidateAll();
-                } else if (!extCatalog.getUseMetaCache().get()) {
-                    for (T table : idToTbl.values()) {
-                        table.unsetObjectCreated();
-                    }
                 }
             }
-        }
-        if (invalidCache) {
             Env.getCurrentEnv().getExtMetaCacheMgr().invalidateDbCache(extCatalog.getId(), name);
         }
     }
@@ -162,41 +158,98 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         synchronized (this) {
             if (!initialized) {
                 if (extCatalog.getUseMetaCache().get()) {
-                    if (metaCache == null) {
-                        metaCache = Env.getCurrentEnv().getExtMetaCacheMgr().buildMetaCache(
-                                name,
-                                OptionalLong.of(86400L),
-                                OptionalLong.of(Config.external_cache_expire_time_minutes_after_access * 60L),
-                                Config.max_meta_object_cache_num,
-                                ignored -> listTableNames(),
-                                localTableName -> Optional.ofNullable(
-                                        buildTableForInit(null, localTableName,
-                                                Util.genIdByName(extCatalog.getName(), name, localTableName),
-                                                extCatalog,
-                                                this, true)),
-                                (key, value, cause)
-                                        -> value.ifPresent(ExternalTable::unsetObjectCreated));
-                    }
-                    setLastUpdateTime(System.currentTimeMillis());
+                    initWithCache();
                 } else {
-                    if (!Env.getCurrentEnv().isMaster()) {
-                        // Forward to master and wait the journal to replay.
-                        int waitTimeOut = ConnectContext.get() == null ? 300 : ConnectContext.get().getExecTimeout();
-                        MasterCatalogExecutor remoteExecutor = new MasterCatalogExecutor(waitTimeOut * 1000);
-                        try {
-                            remoteExecutor.forward(extCatalog.getId(), id);
-                        } catch (Exception e) {
-                            Util.logAndThrowRuntimeException(LOG,
-                                    String.format("failed to forward init external db %s operation to master", name),
-                                    e);
-                        }
-                        return;
-                    }
-                    init();
+                    initWithoutCache();
                 }
                 initialized = true;
             }
         }
+    }
+
+    private void initWithCache() {
+        if (metaCache == null) {
+            metaCache = Env.getCurrentEnv().getExtMetaCacheMgr().buildMetaCache(
+                name,
+                OptionalLong.of(86400L),
+                OptionalLong.of(Config.external_cache_expire_time_minutes_after_access * 60L),
+                Config.max_meta_object_cache_num,
+                ignored -> listTableNames(),
+                localTableName -> Optional.ofNullable(
+                    buildTableForInit(null, localTableName,
+                        Util.genIdByName(extCatalog.getName(), name, localTableName),
+                        extCatalog,
+                        this, true)),
+                (key, value, cause) -> value.ifPresent(ExternalTable::unsetObjectCreated));
+        } else {
+            //only reset the tableName lazy reload table objects
+            listTableNames();
+        }
+        setLastUpdateTime(System.currentTimeMillis());
+    }
+
+    private void initWithoutCache() {
+        if (!Env.getCurrentEnv().isMaster()) {
+            // Forward to master and wait the journal to replay.
+            int waitTimeOut = ConnectContext.get() == null ? 300 : ConnectContext.get().getExecTimeout();
+            MasterCatalogExecutor remoteExecutor = new MasterCatalogExecutor(waitTimeOut * 1000);
+            try {
+                remoteExecutor.forward(extCatalog.getId(), id);
+            } catch (Exception e) {
+                Util.logAndThrowRuntimeException(LOG, String.format("failed to forward init external db %s "
+                        + "operation to master", name), e);
+            }
+            return;
+        }
+
+        //init database local data
+        InitDatabaseLog initDatabaseLog = new InitDatabaseLog();
+        initDatabaseLog.setType(dbLogType);
+        initDatabaseLog.setCatalogId(extCatalog.getId());
+        initDatabaseLog.setDbId(id);
+        List<Pair<String, String>> tableNamePairs = listTableNames();
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("init external db[{}.{}] with tables[{}]",  extCatalog.getName(), name, tableNamePairs);
+        }
+        if (tableNamePairs != null) {
+            Map<String, Long> tmpTableNameToId = Maps.newConcurrentMap();
+            Map<Long, T> tmpIdToTbl = Maps.newHashMap();
+            for (Pair<String, String> pair : tableNamePairs) {
+                String remoteTableName = pair.first;
+                String localTableName = pair.second;
+                long tblId;
+                if (tableNameToId != null && tableNameToId.containsKey(localTableName)) {
+                    tblId = tableNameToId.get(localTableName);
+                    tmpTableNameToId.put(localTableName, tblId);
+                    T table = idToTbl.get(tblId);
+                    // If the remote name is missing during upgrade, all tables in the Map will be reinitialized.
+                    if (Strings.isNullOrEmpty(table.getRemoteName())) {
+                        table.setRemoteName(remoteTableName);
+                    }
+                    // If the db is missing, set it.
+                    if (table.getDb() == null) {
+                        table.setDb(this);
+                    }
+                    tmpIdToTbl.put(tblId, table);
+                    initDatabaseLog.addRefreshTable(tblId, remoteTableName);
+                } else {
+                    tblId = Env.getCurrentEnv().getNextId();
+                    tmpTableNameToId.put(localTableName, tblId);
+                    T table = buildTableForInit(remoteTableName, localTableName, tblId, extCatalog, this, false);
+                    tmpIdToTbl.put(tblId, table);
+                    initDatabaseLog.addCreateTable(tblId, localTableName, remoteTableName);
+                }
+            }
+            tableNameToId = tmpTableNameToId;
+            idToTbl = tmpIdToTbl;
+        }
+
+        lastUpdateTime = System.currentTimeMillis();
+        initDatabaseLog.setLastUpdateTime(lastUpdateTime);
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("init database[{}.{}] log: {}", extCatalog.name, name, initDatabaseLog);
+        }
+        Env.getCurrentEnv().getEditLog().logInitExternalDb(initDatabaseLog);
     }
 
     public void replayInitDb(InitDatabaseLog log, ExternalCatalog catalog) {
@@ -269,55 +322,7 @@ public abstract class ExternalDatabase<T extends ExternalTable>
         initialized = true;
     }
 
-    private void init() {
-        InitDatabaseLog initDatabaseLog = new InitDatabaseLog();
-        initDatabaseLog.setType(dbLogType);
-        initDatabaseLog.setCatalogId(extCatalog.getId());
-        initDatabaseLog.setDbId(id);
-        List<Pair<String, String>> tableNamePairs = listTableNames();
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("init external db[{}.{}] with tables[{}]",  extCatalog.getName(), name, tableNamePairs);
-        }
-        if (tableNamePairs != null) {
-            Map<String, Long> tmpTableNameToId = Maps.newConcurrentMap();
-            Map<Long, T> tmpIdToTbl = Maps.newHashMap();
-            for (Pair<String, String> pair : tableNamePairs) {
-                String remoteTableName = pair.first;
-                String localTableName = pair.second;
-                long tblId;
-                if (tableNameToId != null && tableNameToId.containsKey(localTableName)) {
-                    tblId = tableNameToId.get(localTableName);
-                    tmpTableNameToId.put(localTableName, tblId);
-                    T table = idToTbl.get(tblId);
-                    // If the remote name is missing during upgrade, all tables in the Map will be reinitialized.
-                    if (Strings.isNullOrEmpty(table.getRemoteName())) {
-                        table.setRemoteName(remoteTableName);
-                    }
-                    // If the db is missing, set it.
-                    if (table.getDb() == null) {
-                        table.setDb(this);
-                    }
-                    tmpIdToTbl.put(tblId, table);
-                    initDatabaseLog.addRefreshTable(tblId, remoteTableName);
-                } else {
-                    tblId = Env.getCurrentEnv().getNextId();
-                    tmpTableNameToId.put(localTableName, tblId);
-                    T table = buildTableForInit(remoteTableName, localTableName, tblId, extCatalog, this, false);
-                    tmpIdToTbl.put(tblId, table);
-                    initDatabaseLog.addCreateTable(tblId, localTableName, remoteTableName);
-                }
-            }
-            tableNameToId = tmpTableNameToId;
-            idToTbl = tmpIdToTbl;
-        }
 
-        lastUpdateTime = System.currentTimeMillis();
-        initDatabaseLog.setLastUpdateTime(lastUpdateTime);
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("init database[{}.{}] log: {}", extCatalog.name, name, initDatabaseLog);
-        }
-        Env.getCurrentEnv().getEditLog().logInitExternalDb(initDatabaseLog);
-    }
 
     private List<Pair<String, String>> listTableNames() {
         List<Pair<String, String>> tableNames;
