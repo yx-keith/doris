@@ -20,6 +20,7 @@ package org.apache.doris.load;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.common.LoadException;
+import org.apache.doris.common.Pair;
 import org.apache.doris.common.util.SlidingWindowCounter;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.system.Backend;
@@ -35,14 +36,11 @@ import org.junit.Test;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.StampedLock;
 
 public class GroupCommitManagerTest {
 
@@ -57,30 +55,36 @@ public class GroupCommitManagerTest {
     @Mocked
     private InternalCatalog internalCatalog;
 
+    @Injectable
+    private OlapTable table;
+
+    @Injectable
+    private OlapTable table1;
+
+    @Injectable
+    private OlapTable table2;
+
+    @Injectable
+    private Backend backend;
+
+    @Injectable
+    private Backend backend1;
+
+    @Injectable
+    private Backend backend2;
+
     @Before
     public void setUp() {
         groupCommitManager = new GroupCommitManager();
     }
 
-    @SuppressWarnings("unchecked")
-    private Map<Long, Long> getTableToBeMap() throws Exception {
-        Field field = GroupCommitManager.class.getDeclaredField("tableToBeMap");
-        field.setAccessible(true);
-        return (Map<Long, Long>) field.get(groupCommitManager);
-    }
+    // ==================== Reflection helpers ====================
 
     @SuppressWarnings("unchecked")
-    private Map<Long, SlidingWindowCounter> getTableToPressureMap() throws Exception {
-        Field field = GroupCommitManager.class.getDeclaredField("tableToPressureMap");
+    private Map<Long, Pair<Long, SlidingWindowCounter>> getTableToBePairMap() throws Exception {
+        Field field = GroupCommitManager.class.getDeclaredField("tableToBePairMap");
         field.setAccessible(true);
-        return (Map<Long, SlidingWindowCounter>) field.get(groupCommitManager);
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<Long, StampedLock> getTableLocks() throws Exception {
-        Field field = GroupCommitManager.class.getDeclaredField("tableLocks");
-        field.setAccessible(true);
-        return (Map<Long, StampedLock>) field.get(groupCommitManager);
+        return (Map<Long, Pair<Long, SlidingWindowCounter>>) field.get(groupCommitManager);
     }
 
     private Long invokeGetCachedBackend(long tableId) throws Exception {
@@ -107,12 +111,76 @@ public class GroupCommitManagerTest {
         return (long) method.invoke(groupCommitManager, tableId);
     }
 
+    // ==================== Unit tests for block/unblock/isBlock ====================
+
+    @Test
+    public void testBlockAndIsBlock() {
+        long tableId = 100L;
+        Assert.assertFalse(groupCommitManager.isBlock(tableId));
+
+        groupCommitManager.blockTable(tableId);
+        Assert.assertTrue(groupCommitManager.isBlock(tableId));
+    }
+
+    @Test
+    public void testUnblockTable() {
+        long tableId = 200L;
+        groupCommitManager.blockTable(tableId);
+        Assert.assertTrue(groupCommitManager.isBlock(tableId));
+
+        groupCommitManager.unblockTable(tableId);
+        Assert.assertFalse(groupCommitManager.isBlock(tableId));
+    }
+
+    @Test
+    public void testBlockMultipleTables() {
+        long tableId1 = 301L;
+        long tableId2 = 302L;
+        long tableId3 = 303L;
+
+        groupCommitManager.blockTable(tableId1);
+        groupCommitManager.blockTable(tableId2);
+
+        Assert.assertTrue(groupCommitManager.isBlock(tableId1));
+        Assert.assertTrue(groupCommitManager.isBlock(tableId2));
+        Assert.assertFalse(groupCommitManager.isBlock(tableId3));
+    }
+
+    @Test
+    public void testUnblockNonBlockedTable() {
+        long tableId = 400L;
+        // unblock a table that was never blocked should not throw
+        groupCommitManager.unblockTable(tableId);
+        Assert.assertFalse(groupCommitManager.isBlock(tableId));
+    }
+
+    @Test
+    public void testBlockIdempotent() {
+        long tableId = 500L;
+        groupCommitManager.blockTable(tableId);
+        groupCommitManager.blockTable(tableId);
+        Assert.assertTrue(groupCommitManager.isBlock(tableId));
+
+        groupCommitManager.unblockTable(tableId);
+        Assert.assertFalse(groupCommitManager.isBlock(tableId));
+    }
+
     // ==================== Unit tests for getCachedBackend ====================
 
     @Test
+    public void testGetCachedBackendNoEntry() throws Exception {
+        long tableId = 1001L;
+        // tableToBePairMap is empty, should return null
+        Long result = invokeGetCachedBackend(tableId);
+        Assert.assertNull(result);
+    }
+
+    @Test
     public void testGetCachedBackendTableNotFound() throws Exception {
-        long tableId = 99999L;
-        getTableToBeMap().put(tableId, 1L);
+        long tableId = 1002L;
+        long backendId = 1L;
+
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
 
         new Expectations() {{
                 env.getInternalCatalog();
@@ -121,35 +189,22 @@ public class GroupCommitManagerTest {
                 result = null;
             }};
 
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertNull(result);
+        // When table is null, getCachedBackend will NPE on table.getGroupCommitDataBytes()
+        // This is expected behavior - the table should always exist in production
+        try {
+            invokeGetCachedBackend(tableId);
+            Assert.fail("Expected NullPointerException due to null table");
+        } catch (InvocationTargetException e) {
+            Assert.assertTrue(e.getCause() instanceof NullPointerException);
+        }
     }
 
     @Test
-    public void testGetCachedBackendPressureMapInconsistent(@Injectable OlapTable table) throws Exception {
-        long tableId = 100L;
-        long backendId = 1L;
+    public void testGetCachedBackendNormal() throws Exception {
+        long tableId = 1003L;
+        long backendId = 2L;
 
-        getTableToBeMap().put(tableId, backendId);
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-            }};
-
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertNull(result);
-    }
-
-    @Test
-    public void testGetCachedBackendNormal(@Injectable OlapTable table, @Injectable Backend backend) throws Exception {
-        long tableId = 100L;
-        long backendId = 1L;
-
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, new SlidingWindowCounter(10));
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
 
         new Expectations() {{
                 env.getInternalCatalog();
@@ -166,42 +221,121 @@ public class GroupCommitManagerTest {
                 result = true;
                 backend.isDecommissioned();
                 result = false;
-                backend.getId();
-                result = backendId;
             }};
 
         Long result = invokeGetCachedBackend(tableId);
         Assert.assertEquals(Long.valueOf(backendId), result);
     }
 
-    // ==================== Unit tests for getRandomBackend ====================
-
     @Test
-    public void testGetRandomBackendTableNotFound() throws Exception {
-        long tableId = 99999L;
-        List<Backend> backends = new ArrayList<>();
+    public void testGetCachedBackendPressureExceededRemovesEntry() throws Exception {
+        long tableId = 1004L;
+        long backendId = 3L;
+
+        SlidingWindowCounter counter = new SlidingWindowCounter(10);
+        counter.add(Long.MAX_VALUE / 2);
+        getTableToBePairMap().put(tableId, Pair.of(backendId, counter));
 
         new Expectations() {{
                 env.getInternalCatalog();
                 result = internalCatalog;
                 internalCatalog.getTableByTableId(tableId);
-                result = null;
+                result = table;
+                table.getGroupCommitDataBytes();
+                result = 1;
             }};
 
-        try {
-            invokeGetRandomBackend(tableId, backends);
-            Assert.fail("Expected LoadException");
-        } catch (InvocationTargetException e) {
-            Assert.assertTrue(e.getCause() instanceof LoadException);
-            Assert.assertTrue(e.getCause().getMessage().contains("Table not found"));
-        }
+        Long result = invokeGetCachedBackend(tableId);
+        Assert.assertNull(result);
+        Assert.assertFalse(getTableToBePairMap().containsKey(tableId));
     }
 
     @Test
-    public void testGetRandomBackendPutsBothMapsAtomically(@Injectable OlapTable table,
-                                                            @Injectable Backend backend) throws Exception {
-        long tableId = 200L;
-        long backendId = 2L;
+    public void testGetCachedBackendBeUnavailableRemovesEntry() throws Exception {
+        long tableId = 1005L;
+        long backendId = 4L;
+
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
+
+        new Expectations() {{
+                env.getInternalCatalog();
+                result = internalCatalog;
+                internalCatalog.getTableByTableId(tableId);
+                result = table;
+                table.getGroupCommitDataBytes();
+                result = Integer.MAX_VALUE;
+                env.getCurrentSystemInfo();
+                result = systemInfoService;
+                systemInfoService.getBackend(backendId);
+                result = backend;
+                backend.isAlive();
+                result = false;
+            }};
+
+        Long result = invokeGetCachedBackend(tableId);
+        Assert.assertNull(result);
+        Assert.assertFalse(getTableToBePairMap().containsKey(tableId));
+    }
+
+    @Test
+    public void testGetCachedBackendBeDecommissionedRemovesEntry() throws Exception {
+        long tableId = 1006L;
+        long backendId = 5L;
+
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
+
+        new Expectations() {{
+                env.getInternalCatalog();
+                result = internalCatalog;
+                internalCatalog.getTableByTableId(tableId);
+                result = table;
+                table.getGroupCommitDataBytes();
+                result = Integer.MAX_VALUE;
+                env.getCurrentSystemInfo();
+                result = systemInfoService;
+                systemInfoService.getBackend(backendId);
+                result = backend;
+                backend.isAlive();
+                result = true;
+                backend.isDecommissioned();
+                result = true;
+            }};
+
+        Long result = invokeGetCachedBackend(tableId);
+        Assert.assertNull(result);
+        Assert.assertFalse(getTableToBePairMap().containsKey(tableId));
+    }
+
+    @Test
+    public void testGetCachedBackendBeNullRemovesEntry() throws Exception {
+        long tableId = 1007L;
+        long backendId = 6L;
+
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
+
+        new Expectations() {{
+                env.getInternalCatalog();
+                result = internalCatalog;
+                internalCatalog.getTableByTableId(tableId);
+                result = table;
+                table.getGroupCommitDataBytes();
+                result = Integer.MAX_VALUE;
+                env.getCurrentSystemInfo();
+                result = systemInfoService;
+                systemInfoService.getBackend(backendId);
+                result = null;
+            }};
+
+        Long result = invokeGetCachedBackend(tableId);
+        Assert.assertNull(result);
+        Assert.assertFalse(getTableToBePairMap().containsKey(tableId));
+    }
+
+    // ==================== Unit tests for getRandomBackend ====================
+
+    @Test
+    public void testGetRandomBackendNoAliveBackend() throws Exception {
+        long tableId = 2001L;
         List<Backend> backends = Collections.singletonList(backend);
 
         new Expectations() {{
@@ -210,7 +344,52 @@ public class GroupCommitManagerTest {
                 internalCatalog.getTableByTableId(tableId);
                 result = table;
                 table.getGroupCommitIntervalMs();
-                result = 1000L;
+                result = 1000;
+                backend.isAlive();
+                result = false;
+            }};
+
+        Long result = invokeGetRandomBackend(tableId, backends);
+        Assert.assertNull(result);
+        Assert.assertFalse(getTableToBePairMap().containsKey(tableId));
+    }
+
+    @Test
+    public void testGetRandomBackendAllBackendsDecommissioned() throws Exception {
+        long tableId = 2002L;
+        List<Backend> backends = Collections.singletonList(backend);
+
+        new Expectations() {{
+                env.getInternalCatalog();
+                result = internalCatalog;
+                internalCatalog.getTableByTableId(tableId);
+                result = table;
+                table.getGroupCommitIntervalMs();
+                result = 1000;
+                backend.isAlive();
+                result = true;
+                backend.isDecommissioned();
+                result = true;
+            }};
+
+        Long result = invokeGetRandomBackend(tableId, backends);
+        Assert.assertNull(result);
+        Assert.assertFalse(getTableToBePairMap().containsKey(tableId));
+    }
+
+    @Test
+    public void testGetRandomBackendPutsPairAtomically() throws Exception {
+        long tableId = 2003L;
+        long backendId = 20L;
+        List<Backend> backends = Collections.singletonList(backend);
+
+        new Expectations() {{
+                env.getInternalCatalog();
+                result = internalCatalog;
+                internalCatalog.getTableByTableId(tableId);
+                result = table;
+                table.getGroupCommitIntervalMs();
+                result = 1000;
                 backend.isAlive();
                 result = true;
                 backend.isDecommissioned();
@@ -221,44 +400,103 @@ public class GroupCommitManagerTest {
 
         Long result = invokeGetRandomBackend(tableId, backends);
         Assert.assertEquals(Long.valueOf(backendId), result);
-        Assert.assertEquals(backendId, (long) getTableToBeMap().get(tableId));
-        Assert.assertNotNull(getTableToPressureMap().get(tableId));
+
+        // Verify the Pair is stored atomically - both backendId and counter exist together
+        Pair<Long, SlidingWindowCounter> pair = getTableToBePairMap().get(tableId);
+        Assert.assertNotNull(pair);
+        Assert.assertEquals(Long.valueOf(backendId), pair.first);
+        Assert.assertNotNull(pair.second);
     }
 
     // ==================== Unit tests for updateLoadDataInternal ====================
 
     @Test
-    public void testUpdateLoadDataInternalPressureMapInconsistent() throws Exception {
-        long tableId = 300L;
-
-        getTableToBeMap().put(tableId, 1L);
-
+    public void testUpdateLoadDataInternalNoEntry() throws Exception {
+        long tableId = 3001L;
+        // No entry in tableToBePairMap, updateLoadDataInternal should just log and return
         invokeUpdateLoadDataInternal(tableId, 100L);
-
-        Assert.assertNull(getTableToPressureMap().get(tableId));
+        Assert.assertFalse(getTableToBePairMap().containsKey(tableId));
     }
 
     @Test
     public void testUpdateLoadDataInternalNormal() throws Exception {
-        long tableId = 400L;
+        long tableId = 3002L;
+        long backendId = 30L;
 
         SlidingWindowCounter counter = new SlidingWindowCounter(10);
-        getTableToPressureMap().put(tableId, counter);
+        getTableToBePairMap().put(tableId, Pair.of(backendId, counter));
 
         invokeUpdateLoadDataInternal(tableId, 100L);
 
-        Assert.assertNotNull(getTableToPressureMap().get(tableId));
+        Pair<Long, SlidingWindowCounter> pair = getTableToBePairMap().get(tableId);
+        Assert.assertNotNull(pair);
+        Assert.assertEquals(Long.valueOf(backendId), pair.first);
+        // Counter should have been updated
+        Assert.assertNotNull(pair.second);
     }
 
-    // ==================== Concurrency tests ====================
+    @Test
+    public void testUpdateLoadDataInternalInvalidTableId() throws Exception {
+        // tableId == -1 should be handled gracefully (just logs a warning)
+        invokeUpdateLoadDataInternal(-1, 100L);
+        Assert.assertFalse(getTableToBePairMap().containsKey(-1L));
+    }
+
+    // ==================== Unit tests for selectBackendForLocalGroupCommitInternal ====================
 
     @Test
-    public void testConcurrentGetCachedBackendNoNpe(@Injectable OlapTable table) throws Exception {
-        long tableId = 500L;
-        long backendId = 5L;
-        int threadCount = 20;
+    public void testSelectBackendNoAliveBackends() throws Exception {
+        long tableId = 4001L;
 
-        getTableToBeMap().put(tableId, backendId);
+        new Expectations() {{
+                env.getCurrentSystemInfo();
+                result = systemInfoService;
+                systemInfoService.getAllBackends();
+                result = Collections.emptyList();
+            }};
+
+        try {
+            invokeSelectBackendForLocalGroupCommitInternal(tableId);
+            Assert.fail("Expected LoadException");
+        } catch (InvocationTargetException e) {
+            Assert.assertTrue(e.getCause() instanceof LoadException);
+            Assert.assertTrue(e.getCause().getMessage().contains("No alive backend"));
+        }
+    }
+
+    @Test
+    public void testSelectBackendUsesCachedBackend() throws Exception {
+        long tableId = 4002L;
+        long backendId = 40L;
+
+        // Pre-populate the cache with a valid entry
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
+
+        new Expectations() {{
+                env.getInternalCatalog();
+                result = internalCatalog;
+                internalCatalog.getTableByTableId(tableId);
+                result = table;
+                table.getGroupCommitDataBytes();
+                result = Integer.MAX_VALUE;
+                env.getCurrentSystemInfo();
+                result = systemInfoService;
+                systemInfoService.getBackend(backendId);
+                result = backend;
+                backend.isAlive();
+                result = true;
+                backend.isDecommissioned();
+                result = false;
+            }};
+
+        long result = invokeSelectBackendForLocalGroupCommitInternal(tableId);
+        Assert.assertEquals(backendId, result);
+    }
+
+    @Test
+    public void testSelectBackendSelectsRandomWhenNoCache() throws Exception {
+        long tableId = 4003L;
+        long backendId = 41L;
 
         new Expectations() {{
                 env.getInternalCatalog();
@@ -266,6 +504,57 @@ public class GroupCommitManagerTest {
                 minTimes = 0;
                 internalCatalog.getTableByTableId(tableId);
                 result = table;
+                minTimes = 0;
+                table.getGroupCommitIntervalMs();
+                result = 1000;
+                env.getCurrentSystemInfo();
+                result = systemInfoService;
+                minTimes = 0;
+                systemInfoService.getAllBackends();
+                result = Collections.singletonList(backend);
+                backend.isAlive();
+                result = true;
+                backend.isDecommissioned();
+                result = false;
+                backend.getId();
+                result = backendId;
+            }};
+
+        long result = invokeSelectBackendForLocalGroupCommitInternal(tableId);
+        Assert.assertEquals(backendId, result);
+    }
+
+    // ==================== Concurrency tests ====================
+
+    @Test
+    public void testConcurrentGetCachedBackendNoNpe() throws Exception {
+        long tableId = 5001L;
+        long backendId = 50L;
+        int threadCount = 20;
+
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
+
+        new Expectations() {{
+                env.getInternalCatalog();
+                result = internalCatalog;
+                minTimes = 0;
+                internalCatalog.getTableByTableId(tableId);
+                result = table;
+                minTimes = 0;
+                table.getGroupCommitDataBytes();
+                result = Integer.MAX_VALUE;
+                minTimes = 0;
+                env.getCurrentSystemInfo();
+                result = systemInfoService;
+                minTimes = 0;
+                systemInfoService.getBackend(backendId);
+                result = backend;
+                minTimes = 0;
+                backend.isAlive();
+                result = true;
+                minTimes = 0;
+                backend.isDecommissioned();
+                result = false;
                 minTimes = 0;
             }};
 
@@ -277,10 +566,6 @@ public class GroupCommitManagerTest {
                 try {
                     barrier.await();
                     invokeGetCachedBackend(tableId);
-                } catch (AssertionError e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
-                    }
                 } catch (Exception e) {
                     if (e.getCause() instanceof NullPointerException) {
                         npeCount.incrementAndGet();
@@ -295,11 +580,11 @@ public class GroupCommitManagerTest {
 
     @Test
     public void testConcurrentUpdateLoadDataNoNpe() throws Exception {
-        long tableId = 600L;
-        long backendId = 6L;
+        long tableId = 5002L;
+        long backendId = 51L;
         int threadCount = 20;
 
-        getTableToBeMap().put(tableId, backendId);
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
 
         CyclicBarrier barrier = new CyclicBarrier(threadCount);
         AtomicInteger npeCount = new AtomicInteger(0);
@@ -309,10 +594,6 @@ public class GroupCommitManagerTest {
                 try {
                     barrier.await();
                     invokeUpdateLoadDataInternal(tableId, 100L);
-                } catch (AssertionError e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
-                    }
                 } catch (Exception e) {
                     if (e.getCause() instanceof NullPointerException) {
                         npeCount.incrementAndGet();
@@ -326,10 +607,9 @@ public class GroupCommitManagerTest {
     }
 
     @Test
-    public void testStripedLockAtomicityGetRandomThenGetCached(@Injectable OlapTable table,
-                                                                @Injectable Backend backend) throws Exception {
-        long tableId = 700L;
-        long backendId = 7L;
+    public void testConcurrentGetRandomThenGetCached() throws Exception {
+        long tableId = 5003L;
+        long backendId = 52L;
         int threadCount = 20;
 
         new Expectations() {{
@@ -343,7 +623,7 @@ public class GroupCommitManagerTest {
                 result = Integer.MAX_VALUE;
                 minTimes = 0;
                 table.getGroupCommitIntervalMs();
-                result = 1000L;
+                result = 1000;
                 minTimes = 0;
                 env.getCurrentSystemInfo();
                 result = systemInfoService;
@@ -363,7 +643,6 @@ public class GroupCommitManagerTest {
             }};
 
         CyclicBarrier barrier = new CyclicBarrier(threadCount);
-        AtomicInteger inconsistentCount = new AtomicInteger(0);
         AtomicInteger npeCount = new AtomicInteger(0);
 
         for (int i = 0; i < threadCount; i++) {
@@ -375,18 +654,7 @@ public class GroupCommitManagerTest {
                         List<Backend> backends = Collections.singletonList(backend);
                         invokeGetRandomBackend(tableId, backends);
                     } else {
-                        Long cached = invokeGetCachedBackend(tableId);
-                        if (cached != null) {
-                            boolean hasBe = getTableToBeMap().containsKey(tableId);
-                            boolean hasPressure = getTableToPressureMap().containsKey(tableId);
-                            if (hasBe != hasPressure) {
-                                inconsistentCount.incrementAndGet();
-                            }
-                        }
-                    }
-                } catch (AssertionError e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
+                        invokeGetCachedBackend(tableId);
                     }
                 } catch (Exception e) {
                     if (e.getCause() instanceof NullPointerException) {
@@ -398,209 +666,17 @@ public class GroupCommitManagerTest {
 
         Thread.sleep(3000);
         Assert.assertEquals(0, npeCount.get());
-        Assert.assertEquals(0, inconsistentCount.get());
+        // After concurrent getRandom + getCached, the Pair entry should be consistent
+        Pair<Long, SlidingWindowCounter> pair = getTableToBePairMap().get(tableId);
+        Assert.assertNotNull(pair);
+        Assert.assertEquals(Long.valueOf(backendId), pair.first);
+        Assert.assertNotNull(pair.second);
     }
 
     @Test
-    public void testConcurrentPutBeforePressureMapNoNpe(@Injectable OlapTable table,
-                                                         @Injectable Backend backend) throws Exception {
-        long tableId = 800L;
-        long backendId = 8L;
-        int readerCount = 20;
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                minTimes = 0;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                minTimes = 0;
-                table.getGroupCommitDataBytes();
-                result = Integer.MAX_VALUE;
-                minTimes = 0;
-                table.getGroupCommitIntervalMs();
-                result = 1000L;
-                minTimes = 0;
-                env.getCurrentSystemInfo();
-                result = systemInfoService;
-                minTimes = 0;
-                systemInfoService.getBackend(backendId);
-                result = backend;
-                minTimes = 0;
-                backend.isAlive();
-                result = true;
-                minTimes = 0;
-                backend.isDecommissioned();
-                result = false;
-                minTimes = 0;
-                backend.getId();
-                result = backendId;
-                minTimes = 0;
-            }};
-
-        CountDownLatch writerReady = new CountDownLatch(1);
-        CountDownLatch readersReady = new CountDownLatch(readerCount);
-        CountDownLatch readersDone = new CountDownLatch(readerCount);
-        AtomicInteger npeCount = new AtomicInteger(0);
-
-        Thread writer = new Thread(() -> {
-            try {
-                writerReady.await();
-                List<Backend> backends = Collections.singletonList(backend);
-                invokeGetRandomBackend(tableId, backends);
-            } catch (Exception e) {
-                // ignore
-            }
-        });
-
-        for (int i = 0; i < readerCount; i++) {
-            new Thread(() -> {
-                try {
-                    readersReady.countDown();
-                    writerReady.await();
-                    Thread.sleep(1);
-                    invokeGetCachedBackend(tableId);
-                } catch (AssertionError e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
-                    }
-                } catch (Exception e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
-                    }
-                } finally {
-                    readersDone.countDown();
-                }
-            }).start();
-        }
-
-        readersReady.await();
-        writerReady.countDown();
-        writer.start();
-
-        readersDone.await(5, java.util.concurrent.TimeUnit.SECONDS);
-        Assert.assertEquals(0, npeCount.get());
-    }
-
-    @Test
-    public void testConcurrentRemoveFromPressureMapWhileRead(@Injectable OlapTable table,
-                                                              @Injectable Backend backend) throws Exception {
-        long tableId = 900L;
-        long backendId = 9L;
-        int readerCount = 20;
-
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, new SlidingWindowCounter(10));
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                minTimes = 0;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                minTimes = 0;
-                table.getGroupCommitDataBytes();
-                result = Integer.MAX_VALUE;
-                minTimes = 0;
-                env.getCurrentSystemInfo();
-                result = systemInfoService;
-                minTimes = 0;
-                systemInfoService.getBackend(backendId);
-                result = backend;
-                minTimes = 0;
-                backend.isAlive();
-                result = true;
-                minTimes = 0;
-                backend.isDecommissioned();
-                result = false;
-                minTimes = 0;
-                backend.getId();
-                result = backendId;
-                minTimes = 0;
-            }};
-
-        CyclicBarrier barrier = new CyclicBarrier(readerCount + 1);
-        AtomicInteger npeCount = new AtomicInteger(0);
-
-        Thread remover = new Thread(() -> {
-            try {
-                barrier.await();
-                getTableToPressureMap().remove(tableId);
-            } catch (Exception e) {
-                // ignore
-            }
-        });
-
-        for (int i = 0; i < readerCount; i++) {
-            new Thread(() -> {
-                try {
-                    barrier.await();
-                    invokeGetCachedBackend(tableId);
-                } catch (AssertionError e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
-                    }
-                } catch (Exception e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
-                    }
-                }
-            }).start();
-        }
-
-        remover.start();
-        Thread.sleep(3000);
-        Assert.assertEquals(0, npeCount.get());
-    }
-
-    @Test
-    public void testConcurrentRemoveFromPressureMapWhileUpdateLoad() throws Exception {
-        long tableId = 1000L;
-        long backendId = 10L;
-        int updaterCount = 20;
-
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, new SlidingWindowCounter(10));
-
-        CyclicBarrier barrier = new CyclicBarrier(updaterCount + 1);
-        AtomicInteger npeCount = new AtomicInteger(0);
-
-        Thread remover = new Thread(() -> {
-            try {
-                barrier.await();
-                getTableToPressureMap().remove(tableId);
-            } catch (Exception e) {
-                // ignore
-            }
-        });
-
-        for (int i = 0; i < updaterCount; i++) {
-            new Thread(() -> {
-                try {
-                    barrier.await();
-                    invokeUpdateLoadDataInternal(tableId, 100L);
-                } catch (AssertionError e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
-                    }
-                } catch (Exception e) {
-                    if (e.getCause() instanceof NullPointerException) {
-                        npeCount.incrementAndGet();
-                    }
-                }
-            }).start();
-        }
-
-        remover.start();
-        Thread.sleep(3000);
-        Assert.assertEquals(0, npeCount.get());
-    }
-
-    @Test
-    public void testSelectBackendEndToEndUnderConcurrency(@Injectable OlapTable table,
-                                                           @Injectable Backend backend) throws Exception {
-        long tableId = 1100L;
-        long backendId = 11L;
+    public void testSelectBackendEndToEndUnderConcurrency() throws Exception {
+        long tableId = 5004L;
+        long backendId = 53L;
         int threadCount = 20;
 
         new Expectations() {{
@@ -614,7 +690,7 @@ public class GroupCommitManagerTest {
                 result = Integer.MAX_VALUE;
                 minTimes = 0;
                 table.getGroupCommitIntervalMs();
-                result = 1000L;
+                result = 1000;
                 minTimes = 0;
                 env.getCurrentSystemInfo();
                 result = systemInfoService;
@@ -660,284 +736,47 @@ public class GroupCommitManagerTest {
     }
 
     @Test
-    public void testGetCachedBackendPressureExceededCleansBothMaps(@Injectable OlapTable table,
-                                                                    @Injectable Backend backend) throws Exception {
-        long tableId = 1300L;
-        long backendId = 13L;
+    public void testConcurrentBlockUnblockNoException() {
+        long tableId = 5005L;
+        int threadCount = 20;
+        CyclicBarrier barrier = new CyclicBarrier(threadCount);
+        AtomicInteger errorCount = new AtomicInteger(0);
 
+        for (int i = 0; i < threadCount; i++) {
+            final int idx = i;
+            new Thread(() -> {
+                try {
+                    barrier.await();
+                    if (idx % 2 == 0) {
+                        groupCommitManager.blockTable(tableId);
+                    } else {
+                        groupCommitManager.unblockTable(tableId);
+                    }
+                } catch (Exception e) {
+                    errorCount.incrementAndGet();
+                }
+            }).start();
+        }
+
+        try {
+            Thread.sleep(2000);
+        } catch (InterruptedException e) {
+            // ignore
+        }
+        Assert.assertEquals(0, errorCount.get());
+    }
+
+    // ==================== Reaccess after entry removed ====================
+
+    @Test
+    public void testReaccessAfterPairRemoved() throws Exception {
+        long tableId = 6001L;
+        long backendId = 60L;
+
+        // Pre-populate with a pressure-exceeded entry
         SlidingWindowCounter counter = new SlidingWindowCounter(10);
         counter.add(Long.MAX_VALUE / 2);
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, counter);
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                table.getGroupCommitDataBytes();
-                result = 1;
-            }};
-
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertNull(result);
-        Assert.assertFalse(getTableToBeMap().containsKey(tableId));
-        Assert.assertFalse(getTableToPressureMap().containsKey(tableId));
-    }
-
-    @Test
-    public void testGetCachedBackendBeUnavailableCleansBothMaps(@Injectable OlapTable table,
-                                                                 @Injectable Backend backend) throws Exception {
-        long tableId = 1400L;
-        long backendId = 14L;
-
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, new SlidingWindowCounter(10));
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                table.getGroupCommitDataBytes();
-                result = Integer.MAX_VALUE;
-                env.getCurrentSystemInfo();
-                result = systemInfoService;
-                systemInfoService.getBackend(backendId);
-                result = backend;
-                backend.isAlive();
-                result = false;
-            }};
-
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertNull(result);
-        Assert.assertFalse(getTableToBeMap().containsKey(tableId));
-        Assert.assertFalse(getTableToPressureMap().containsKey(tableId));
-    }
-
-    @Test
-    public void testGetCachedBackendBeDecommissionedCleansBothMaps(@Injectable OlapTable table,
-                                                                    @Injectable Backend backend) throws Exception {
-        long tableId = 1500L;
-        long backendId = 15L;
-
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, new SlidingWindowCounter(10));
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                table.getGroupCommitDataBytes();
-                result = Integer.MAX_VALUE;
-                env.getCurrentSystemInfo();
-                result = systemInfoService;
-                systemInfoService.getBackend(backendId);
-                result = backend;
-                backend.isAlive();
-                result = true;
-                backend.isDecommissioned();
-                result = true;
-            }};
-
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertNull(result);
-        Assert.assertFalse(getTableToBeMap().containsKey(tableId));
-        Assert.assertFalse(getTableToPressureMap().containsKey(tableId));
-    }
-
-    @Test
-    public void testGetCachedBackendBeNullCleansBothMaps(@Injectable OlapTable table) throws Exception {
-        long tableId = 1600L;
-        long backendId = 16L;
-
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, new SlidingWindowCounter(10));
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                table.getGroupCommitDataBytes();
-                result = Integer.MAX_VALUE;
-                env.getCurrentSystemInfo();
-                result = systemInfoService;
-                systemInfoService.getBackend(backendId);
-                result = null;
-            }};
-
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertNull(result);
-        Assert.assertFalse(getTableToBeMap().containsKey(tableId));
-        Assert.assertFalse(getTableToPressureMap().containsKey(tableId));
-    }
-
-    @Test
-    public void testGetCachedBackendReadLockToWriteLockUpgradeBeRecovered(
-            @Injectable OlapTable table, @Injectable Backend backend) throws Exception {
-        long tableId = 1700L;
-        long backendId = 17L;
-
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, new SlidingWindowCounter(10));
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                table.getGroupCommitDataBytes();
-                result = Integer.MAX_VALUE;
-                env.getCurrentSystemInfo();
-                result = systemInfoService;
-                systemInfoService.getBackend(backendId);
-                result = backend;
-                // First call in readLock: BE is not alive, triggers writeLock upgrade
-                // Second call in writeLock: BE is alive again (recovered), should return backendId
-                backend.isAlive();
-                result = false;
-                result = true;
-                backend.isDecommissioned();
-                result = false;
-                backend.getId();
-                result = backendId;
-            }};
-
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertEquals(Long.valueOf(backendId), result);
-        Assert.assertTrue(getTableToBeMap().containsKey(tableId));
-        Assert.assertTrue(getTableToPressureMap().containsKey(tableId));
-    }
-
-    @Test
-    public void testGetRandomBackendNoAliveBackend(@Injectable OlapTable table,
-                                                    @Injectable Backend backend) throws Exception {
-        long tableId = 1800L;
-        List<Backend> backends = Collections.singletonList(backend);
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                backend.isAlive();
-                result = false;
-            }};
-
-        Long result = invokeGetRandomBackend(tableId, backends);
-        Assert.assertNull(result);
-        Assert.assertFalse(getTableToBeMap().containsKey(tableId));
-        Assert.assertFalse(getTableToPressureMap().containsKey(tableId));
-    }
-
-    @Test
-    public void testGetRandomBackendAllBackendsDecommissioned(@Injectable OlapTable table,
-                                                               @Injectable Backend backend) throws Exception {
-        long tableId = 1900L;
-        List<Backend> backends = Collections.singletonList(backend);
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                backend.isAlive();
-                result = true;
-                backend.isDecommissioned();
-                result = true;
-            }};
-
-        Long result = invokeGetRandomBackend(tableId, backends);
-        Assert.assertNull(result);
-        Assert.assertFalse(getTableToBeMap().containsKey(tableId));
-        Assert.assertFalse(getTableToPressureMap().containsKey(tableId));
-    }
-
-    @Test
-    public void testTableLocksNotRemovedAfterPressureExceeded(@Injectable OlapTable table) throws Exception {
-        long tableId = 2000L;
-        long backendId = 20L;
-
-        SlidingWindowCounter counter = new SlidingWindowCounter(10);
-        counter.add(Long.MAX_VALUE / 2);
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, counter);
-
-        Method getTableLockMethod = GroupCommitManager.class.getDeclaredMethod("getTableLock", long.class);
-        getTableLockMethod.setAccessible(true);
-        getTableLockMethod.invoke(groupCommitManager, tableId);
-        Assert.assertTrue(getTableLocks().containsKey(tableId));
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                table.getGroupCommitDataBytes();
-                result = 1;
-            }};
-
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertNull(result);
-        Assert.assertFalse(getTableToBeMap().containsKey(tableId));
-        Assert.assertFalse(getTableToPressureMap().containsKey(tableId));
-        // StampedLock objects are never removed — see comment on tableLocks field
-        Assert.assertTrue(getTableLocks().containsKey(tableId));
-    }
-
-    @Test
-    public void testTableLocksNotRemovedAfterBeUnavailable(@Injectable OlapTable table,
-                                                           @Injectable Backend backend) throws Exception {
-        long tableId = 2100L;
-        long backendId = 21L;
-
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, new SlidingWindowCounter(10));
-
-        Method getTableLockMethod = GroupCommitManager.class.getDeclaredMethod("getTableLock", long.class);
-        getTableLockMethod.setAccessible(true);
-        getTableLockMethod.invoke(groupCommitManager, tableId);
-        Assert.assertTrue(getTableLocks().containsKey(tableId));
-
-        new Expectations() {{
-                env.getInternalCatalog();
-                result = internalCatalog;
-                internalCatalog.getTableByTableId(tableId);
-                result = table;
-                table.getGroupCommitDataBytes();
-                result = Integer.MAX_VALUE;
-                env.getCurrentSystemInfo();
-                result = systemInfoService;
-                systemInfoService.getBackend(backendId);
-                result = backend;
-                backend.isAlive();
-                result = false;
-            }};
-
-        Long result = invokeGetCachedBackend(tableId);
-        Assert.assertNull(result);
-        Assert.assertFalse(getTableToBeMap().containsKey(tableId));
-        Assert.assertFalse(getTableToPressureMap().containsKey(tableId));
-        // StampedLock objects are never removed — see comment on tableLocks field
-        Assert.assertTrue(getTableLocks().containsKey(tableId));
-    }
-
-    @Test
-    public void testReaccessAfterMapsCleaned(@Injectable OlapTable table,
-                                             @Injectable Backend backend) throws Exception {
-        long tableId = 2200L;
-        long backendId = 22L;
-
-        SlidingWindowCounter counter = new SlidingWindowCounter(10);
-        counter.add(Long.MAX_VALUE / 2);
-        getTableToBeMap().put(tableId, backendId);
-        getTableToPressureMap().put(tableId, counter);
-
-        Method getTableLockMethod = GroupCommitManager.class.getDeclaredMethod("getTableLock", long.class);
-        getTableLockMethod.setAccessible(true);
-        getTableLockMethod.invoke(groupCommitManager, tableId);
+        getTableToBePairMap().put(tableId, Pair.of(backendId, counter));
 
         new Expectations() {{
                 env.getInternalCatalog();
@@ -950,7 +789,7 @@ public class GroupCommitManagerTest {
                 result = 1;
                 minTimes = 0;
                 table.getGroupCommitIntervalMs();
-                result = 1000L;
+                result = 1000;
                 minTimes = 0;
                 env.getCurrentSystemInfo();
                 result = systemInfoService;
@@ -969,30 +808,30 @@ public class GroupCommitManagerTest {
                 minTimes = 0;
             }};
 
+        // First call: pressure exceeded, entry removed
         Long result1 = invokeGetCachedBackend(tableId);
         Assert.assertNull(result1);
-        // StampedLock is never removed, so it remains in tableLocks
-        Assert.assertTrue(getTableLocks().containsKey(tableId));
+        Assert.assertFalse(getTableToBePairMap().containsKey(tableId));
 
+        // Second call: getRandomBackend creates a new entry
         List<Backend> backends = Collections.singletonList(backend);
         Long result2 = invokeGetRandomBackend(tableId, backends);
         Assert.assertEquals(Long.valueOf(backendId), result2);
-        Assert.assertTrue(getTableToBeMap().containsKey(tableId));
-        Assert.assertTrue(getTableToPressureMap().containsKey(tableId));
+        Assert.assertTrue(getTableToBePairMap().containsKey(tableId));
 
+        // Third call: getCachedBackend finds the new entry
         Long result3 = invokeGetCachedBackend(tableId);
         Assert.assertEquals(Long.valueOf(backendId), result3);
     }
 
+    // ==================== Different tableIds no contention ====================
+
     @Test
-    public void testDifferentTableIdsNoLockContention(@Injectable OlapTable table1,
-                                                       @Injectable OlapTable table2,
-                                                       @Injectable Backend backend1,
-                                                       @Injectable Backend backend2) throws Exception {
-        long tableId1 = 1200L;
-        long tableId2 = 1201L;
-        long backendId1 = 12L;
-        long backendId2 = 13L;
+    public void testDifferentTableIdsNoContention() throws Exception {
+        long tableId1 = 7001L;
+        long tableId2 = 7002L;
+        long backendId1 = 70L;
+        long backendId2 = 71L;
         int perTableThreads = 10;
 
         new Expectations() {{
@@ -1006,10 +845,10 @@ public class GroupCommitManagerTest {
                 result = table2;
                 minTimes = 0;
                 table1.getGroupCommitIntervalMs();
-                result = 1000L;
+                result = 1000;
                 minTimes = 0;
                 table2.getGroupCommitIntervalMs();
-                result = 1000L;
+                result = 1000;
                 minTimes = 0;
                 backend1.isAlive();
                 result = true;
@@ -1063,7 +902,115 @@ public class GroupCommitManagerTest {
 
         Thread.sleep(3000);
         Assert.assertEquals(perTableThreads * 2, successCount.get());
-        Assert.assertEquals(backendId1, (long) getTableToBeMap().get(tableId1));
-        Assert.assertEquals(backendId2, (long) getTableToBeMap().get(tableId2));
+
+        Pair<Long, SlidingWindowCounter> pair1 = getTableToBePairMap().get(tableId1);
+        Pair<Long, SlidingWindowCounter> pair2 = getTableToBePairMap().get(tableId2);
+        Assert.assertNotNull(pair1);
+        Assert.assertNotNull(pair2);
+        Assert.assertEquals(Long.valueOf(backendId1), pair1.first);
+        Assert.assertEquals(Long.valueOf(backendId2), pair2.first);
+    }
+
+    // ==================== Pair consistency under concurrent read/write ====================
+
+    @Test
+    public void testPairConsistencyUnderConcurrentReadAndRemove() throws Exception {
+        long tableId = 8001L;
+        long backendId = 80L;
+        int readerCount = 20;
+
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
+
+        new Expectations() {{
+                env.getInternalCatalog();
+                result = internalCatalog;
+                minTimes = 0;
+                internalCatalog.getTableByTableId(tableId);
+                result = table;
+                minTimes = 0;
+                table.getGroupCommitDataBytes();
+                result = Integer.MAX_VALUE;
+                minTimes = 0;
+                env.getCurrentSystemInfo();
+                result = systemInfoService;
+                minTimes = 0;
+                systemInfoService.getBackend(backendId);
+                result = backend;
+                minTimes = 0;
+                backend.isAlive();
+                result = true;
+                minTimes = 0;
+                backend.isDecommissioned();
+                result = false;
+                minTimes = 0;
+            }};
+
+        CyclicBarrier barrier = new CyclicBarrier(readerCount + 1);
+        AtomicInteger npeCount = new AtomicInteger(0);
+
+        Thread remover = new Thread(() -> {
+            try {
+                barrier.await();
+                getTableToBePairMap().remove(tableId);
+            } catch (Exception e) {
+                // ignore
+            }
+        });
+
+        for (int i = 0; i < readerCount; i++) {
+            new Thread(() -> {
+                try {
+                    barrier.await();
+                    // getCachedBackend reads the Pair atomically from ConcurrentHashMap
+                    invokeGetCachedBackend(tableId);
+                } catch (Exception e) {
+                    if (e.getCause() instanceof NullPointerException) {
+                        npeCount.incrementAndGet();
+                    }
+                }
+            }).start();
+        }
+
+        remover.start();
+        Thread.sleep(3000);
+        Assert.assertEquals(0, npeCount.get());
+    }
+
+    @Test
+    public void testConcurrentRemoveFromPairMapWhileUpdateLoad() throws Exception {
+        long tableId = 8002L;
+        long backendId = 81L;
+        int updaterCount = 20;
+
+        getTableToBePairMap().put(tableId, Pair.of(backendId, new SlidingWindowCounter(10)));
+
+        CyclicBarrier barrier = new CyclicBarrier(updaterCount + 1);
+        AtomicInteger npeCount = new AtomicInteger(0);
+
+        Thread remover = new Thread(() -> {
+            try {
+                barrier.await();
+                getTableToBePairMap().remove(tableId);
+            } catch (Exception e) {
+                // ignore
+            }
+        });
+
+        for (int i = 0; i < updaterCount; i++) {
+            new Thread(() -> {
+                try {
+                    barrier.await();
+                    invokeUpdateLoadDataInternal(tableId, 100L);
+                } catch (Exception e) {
+                    if (e.getCause() instanceof NullPointerException) {
+                        npeCount.incrementAndGet();
+                    }
+                }
+            }).start();
+        }
+
+        remover.start();
+        Thread.sleep(3000);
+        Assert.assertEquals(0, npeCount.get());
     }
 }

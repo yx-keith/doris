@@ -643,13 +643,15 @@ void SystemMetrics::_update_net_metrics() {
         return;
     }
 
-    // Ignore header
-    if (getline(&_line_ptr, &_line_buf_size, fp) < 0) {
-        char buf[64];
-        LOG(WARNING) << "read /proc/net/dev first two line failed, errno=" << errno
-                     << ", message=" << strerror_r(errno, buf, 64);
-        fclose(fp);
-        return;
+    // Ignore header (two lines: "Inter-| Receive | Transmit" and "face |bytes packets ...")
+    for (int i = 0; i < 2; ++i) {
+        if (getline(&_line_ptr, &_line_buf_size, fp) < 0) {
+            char buf[64];
+            LOG(WARNING) << "read /proc/net/dev header line failed, errno=" << errno
+                         << ", message=" << strerror_r(errno, buf, 64);
+            fclose(fp);
+            return;
+        }
     }
     if (_proc_net_dev_version == 0) {
         if (strstr(_line_ptr, "compressed") != nullptr) {

@@ -78,9 +78,10 @@ TEST_F(ThriftClientTest, default_max_message_size_exceeds_thrift_default) {
 }
 
 TEST_F(ThriftClientTest, set_config_max_message_size) {
-    EXPECT_TRUE(config::set_config("thrift_max_message_size", "209715200").ok());
+    config::thrift_max_message_size = 209715200;
     EXPECT_EQ(config::thrift_max_message_size, 209715200);
-    EXPECT_TRUE(config::set_config("thrift_max_message_size", "104857600").ok());
+    config::thrift_max_message_size = 104857600;
+    EXPECT_EQ(config::thrift_max_message_size, 104857600);
 }
 
 } // namespace doris

@@ -151,10 +151,12 @@ class HttpCliAction implements SuiteAction {
                     for (final def header in headers.entrySet()) {
                         httpPost.setHeader(header.getKey(), header.getValue())
                     }
-                    StringEntity requestEntity = new StringEntity(
-                            body,
-                            ContentType.APPLICATION_JSON);
-                    httpPost.setEntity(requestEntity)
+                    if (body != null) {
+                        StringEntity requestEntity = new StringEntity(
+                                body,
+                                ContentType.APPLICATION_JSON);
+                        httpPost.setEntity(requestEntity)
+                    }
 
                     client.execute(httpPost).withCloseable { resp ->
                         resp.withCloseable {
