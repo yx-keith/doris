@@ -19,7 +19,6 @@ package org.apache.doris.nereids.trees.plans.commands;
 
 import org.apache.doris.mysql.MysqlCommand;
 import org.apache.doris.nereids.trees.expressions.Placeholder;
-import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.plans.PlanType;
 import org.apache.doris.nereids.trees.plans.commands.insert.InsertIntoTableCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
@@ -108,11 +107,10 @@ public class PrepareCommand extends Command {
                     && ((InsertIntoTableCommand) logicalPlan).getLabelName().isPresent()) {
             throw new org.apache.doris.common.UserException("Only support prepare InsertStmt without label now");
         }
-        List<Slot> output = logicalPlan instanceof Command ? null : logicalPlan.getOutput();
         ctx.addPreparedStatementContext(name,
                 new PreparedStatementContext(this, ctx, ctx.getStatementContext(), name));
         if (ctx.getCommand() == MysqlCommand.COM_STMT_PREPARE && !ctx.isProxy()) {
-            executor.sendStmtPrepareOK(Integer.parseInt(name), labels, output);
+            executor.sendStmtPrepareOK(Integer.parseInt(name), labels);
         }
     }
 

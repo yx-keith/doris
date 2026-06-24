@@ -25,58 +25,6 @@ suite("test_prepared_stmt", "nonConcurrent") {
     // def url = context.config.jdbcUrl + "&useServerPrepStmts=true&useCursorFetch=true"
     String url = getServerPrepareJdbcUrl(context.config.jdbcUrl, "regression_test_prepared_stmt_p0")
     logger.info("jdbc prepare statement url: ${url}")
-    String cursorFetchUrl = url.replace("useServerPrepStmts=true", "useServerPrepStmts=false") + "&useCursorFetch=true"
-    connect(user, password, cursorFetchUrl) {
-        def stmt = prepareStatement "select 1"
-        assertNotNull(stmt.getMetaData())
-        assertEquals(1, stmt.getMetaData().getColumnCount())
-        stmt.close()
-
-        def metaTbl = "test_prepare_meta_59037"
-        sql """DROP TABLE IF EXISTS ${metaTbl}"""
-        sql """
-            CREATE TABLE ${metaTbl} (
-                c_int INT NOT NULL,
-                c_varchar VARCHAR(50)
-            ) ENGINE=OLAP
-            DUPLICATE KEY(c_int)
-            DISTRIBUTED BY HASH(c_int) BUCKETS 1
-            PROPERTIES ("replication_allocation" = "tag.location.default: 1")
-        """
-        sql """INSERT INTO ${metaTbl} VALUES (1, 'a'), (2, 'b')"""
-
-        // real table SELECT — SlotReference branch fills db/table/column metadata
-        def stmtSelect = prepareStatement "SELECT c_int, c_varchar FROM ${metaTbl}"
-        def mdSelect = stmtSelect.getMetaData()
-        assertNotNull(mdSelect)
-        assertEquals(2, mdSelect.getColumnCount())
-        assertEquals("c_int", mdSelect.getColumnName(1))
-        assertEquals(metaTbl, mdSelect.getTableName(1))
-        assertEquals(java.sql.Types.INTEGER, mdSelect.getColumnType(1))
-        assertEquals("c_varchar", mdSelect.getColumnName(2))
-        assertEquals(metaTbl, mdSelect.getTableName(2))
-        assertEquals(java.sql.Types.VARCHAR, mdSelect.getColumnType(2))
-        stmtSelect.close()
-
-        // params + result columns — both field blocks must be emitted
-        def stmtParam = prepareStatement "SELECT c_int FROM ${metaTbl} WHERE c_int = ?"
-        def mdParam = stmtParam.getMetaData()
-        assertNotNull(mdParam)
-        assertEquals(1, mdParam.getColumnCount())
-        assertEquals("c_int", mdParam.getColumnName(1))
-        assertEquals(1, stmtParam.getParameterMetaData().getParameterCount())
-        stmtParam.close()
-
-        // INSERT — Command branch passes null output, numColumns must stay 0
-        def stmtInsert = prepareStatement "INSERT INTO ${metaTbl} VALUES (?, ?)"
-        def mdInsert = stmtInsert.getMetaData()
-        assertTrue(mdInsert == null || mdInsert.getColumnCount() == 0,
-                "INSERT prepareStatement should return null or empty metadata")
-        assertEquals(2, stmtInsert.getParameterMetaData().getParameterCount())
-        stmtInsert.close()
-
-        sql """DROP TABLE IF EXISTS ${metaTbl}"""
-    }
     def result1 = connect(user, password, url) {
         sql """DROP TABLE IF EXISTS ${tableName} """
         sql """
