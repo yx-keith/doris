@@ -22,7 +22,6 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.function.Function;
 
 /*
  * ResourcePrivTable saves all resources privs
