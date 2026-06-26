@@ -25,6 +25,7 @@
 #include <sstream>
 #include <string>
 
+#include "common/config.h"
 #include "common/logging.h"
 #include "common/status.h"
 #include "util/thrift_server.h"
