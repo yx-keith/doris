@@ -1432,6 +1432,11 @@ public class TypeCoercionUtils {
             }
         }
 
+        if ((leftType.isDecimalLikeType() && rightType.isStringLikeType())
+                || (rightType.isDecimalLikeType() && leftType.isStringLikeType())) {
+            return Optional.of(getDecimalStringComparisonType(leftType, rightType));
+        }
+
         // numeric
         if (leftType.isFloatType() || leftType.isDoubleType()
                 || rightType.isFloatType() || rightType.isDoubleType()) {
@@ -1501,6 +1506,18 @@ public class TypeCoercionUtils {
         }
 
         return Optional.of(DoubleType.INSTANCE);
+    }
+
+    private static DecimalV3Type getDecimalStringComparisonType(DataType leftType, DataType rightType) {
+        DecimalV3Type decimalType = DecimalV3Type.forType(leftType.isDecimalLikeType() ? leftType : rightType);
+        int maxPrecision = SessionVariable.getEnableDecimal256()
+                ? DecimalV3Type.MAX_DECIMAL256_PRECISION : DecimalV3Type.MAX_DECIMAL128_PRECISION;
+        int integerPart = Math.max(decimalType.getPrecision() - decimalType.getScale(), 0);
+        int maxScale = Math.max(maxPrecision - integerPart, 0);
+        int targetScale = Math.max(decimalType.getScale(),
+                Math.min(SessionVariable.getDecimalOverFlowScale(), maxScale));
+        targetScale = Math.min(targetScale, maxScale);
+        return DecimalV3Type.createDecimalV3Type(Math.min(integerPart + targetScale, maxPrecision), targetScale);
     }
 
     /**

@@ -804,6 +804,25 @@ public class TypeCoercionUtilsTest {
     }
 
     @Test
+    public void testProcessComparisonPredicateDecimalStringAvoidDouble() {
+        EqualTo decimalVarchar = new EqualTo(
+                new SlotReference("decimal_col", DecimalV3Type.createDecimalV3Type(38, 0)),
+                new SlotReference("varchar_col", VarcharType.createVarcharType(64))
+        );
+        decimalVarchar = (EqualTo) TypeCoercionUtils.processComparisonPredicate(decimalVarchar);
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(38, 0), decimalVarchar.left().getDataType());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(38, 0), decimalVarchar.right().getDataType());
+
+        EqualTo stringDecimalV2 = new EqualTo(
+                new SlotReference("string_col", StringType.INSTANCE),
+                new SlotReference("decimal_v2_col", DecimalV2Type.SYSTEM_DEFAULT)
+        );
+        stringDecimalV2 = (EqualTo) TypeCoercionUtils.processComparisonPredicate(stringDecimalV2);
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(27, 9), stringDecimalV2.left().getDataType());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(27, 9), stringDecimalV2.right().getDataType());
+    }
+
+    @Test
     public void testProcessInStringCoercion() {
         // BigInt slot vs String literal
         InPredicate bigintString = new InPredicate(

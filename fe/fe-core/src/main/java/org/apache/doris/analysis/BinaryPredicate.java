@@ -344,6 +344,23 @@ public class BinaryPredicate extends Predicate implements Writable {
         }
     }
 
+    private boolean isDecimalStringComparison(Type t1, Type t2) {
+        return (t1.isStringType() && (t2.isDecimalV2() || t2.isDecimalV3()))
+                || (t2.isStringType() && (t1.isDecimalV2() || t1.isDecimalV3()));
+    }
+
+    private Type getDecimalStringComparisonType(Type t1, Type t2) {
+        ScalarType decimalType = (ScalarType) ((t1.isDecimalV2() || t1.isDecimalV3()) ? t1 : t2);
+        int maxPrecision = SessionVariable.getEnableDecimal256()
+                ? ScalarType.MAX_DECIMAL256_PRECISION : ScalarType.MAX_DECIMAL128_PRECISION;
+        int integerPart = Math.max(decimalType.getScalarPrecision() - decimalType.getScalarScale(), 0);
+        int maxScale = Math.max(maxPrecision - integerPart, 0);
+        int targetScale = Math.max(decimalType.getScalarScale(),
+                Math.min(SessionVariable.getDecimalOverFlowScale(), maxScale));
+        targetScale = Math.min(targetScale, maxScale);
+        return ScalarType.createDecimalV3Type(Math.min(integerPart + targetScale, maxPrecision), targetScale);
+    }
+
     private Type getCmpType() throws AnalysisException {
         if (!getChild(0).isConstantImpl() && getChild(1).isConstantImpl()) {
             getChild(1).compactForLiteral(getChild(0).getType());
@@ -473,6 +490,10 @@ public class BinaryPredicate extends Predicate implements Writable {
             if ((t2 == PrimitiveType.BIGINT || t2 == PrimitiveType.LARGEINT) && TypeUtils.canParseTo(getChild(0), t2)) {
                 return Type.fromPrimitiveType(t2);
             }
+        }
+
+        if (isDecimalStringComparison(getChild(0).getType(), getChild(1).getType())) {
+            return getDecimalStringComparisonType(getChild(0).getType(), getChild(1).getType());
         }
 
         if ((t1.isDecimalV3Type() && !t2.isStringType() && !t2.isFloatingPointType() && !t2.isVariantType())
