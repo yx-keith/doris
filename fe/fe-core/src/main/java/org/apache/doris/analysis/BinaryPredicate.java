@@ -344,21 +344,54 @@ public class BinaryPredicate extends Predicate implements Writable {
         }
     }
 
-    private boolean isDecimalStringComparison(Type t1, Type t2) {
-        return (t1.isStringType() && (t2.isDecimalV2() || t2.isDecimalV3()))
-                || (t2.isStringType() && (t1.isDecimalV2() || t1.isDecimalV3()));
+    /**
+     * Check if one type is numeric (integral or decimal) and the other is string.
+     * This covers tinyint, smallint, int, bigint, largeint, decimalv2, decimalv3 with string types.
+     */
+    private boolean isNumericStringComparison(Type t1, Type t2) {
+        return (t1.isStringType() && (t2.isNumericType() && !t2.isFloatingPointType()))
+                || (t2.isStringType() && (t1.isNumericType() && !t1.isFloatingPointType()));
     }
 
-    private Type getDecimalStringComparisonType(Type t1, Type t2) {
-        ScalarType decimalType = (ScalarType) ((t1.isDecimalV2() || t1.isDecimalV3()) ? t1 : t2);
+    /**
+     * Get common decimal type for numeric type vs string type comparison.
+     * This avoids precision loss when comparing numeric types with string types.
+     */
+    private Type getNumericStringComparisonType(Type t1, Type t2) {
+        ScalarType numericType = (ScalarType) (t1.isNumericType() ? t1 : t2);
+        // Convert to decimal representation
+        int precision = numericType.isDecimalV2() || numericType.isDecimalV3()
+                ? numericType.getScalarPrecision()
+                : getFixedPointDecimalPrecision(numericType);
+        int scale = numericType.isDecimalV2() || numericType.isDecimalV3()
+                ? numericType.getScalarScale()
+                : 0;
+
         int maxPrecision = SessionVariable.getEnableDecimal256()
                 ? ScalarType.MAX_DECIMAL256_PRECISION : ScalarType.MAX_DECIMAL128_PRECISION;
-        int integerPart = Math.max(decimalType.getScalarPrecision() - decimalType.getScalarScale(), 0);
+        int integerPart = Math.max(precision - scale, 0);
         int maxScale = Math.max(maxPrecision - integerPart, 0);
-        int targetScale = Math.max(decimalType.getScalarScale(),
+        int targetScale = Math.max(scale,
                 Math.min(SessionVariable.getDecimalOverFlowScale(), maxScale));
         targetScale = Math.min(targetScale, maxScale);
         return ScalarType.createDecimalV3Type(Math.min(integerPart + targetScale, maxPrecision), targetScale);
+    }
+
+    private int getFixedPointDecimalPrecision(ScalarType type) {
+        switch (type.getPrimitiveType()) {
+            case TINYINT:
+                return 3;
+            case SMALLINT:
+                return 5;
+            case INT:
+                return 10;
+            case BIGINT:
+                return 20;
+            case LARGEINT:
+                return ScalarType.MAX_DECIMAL128_PRECISION;
+            default:
+                throw new IllegalStateException("Unsupported fixed-point type: " + type);
+        }
     }
 
     private Type getCmpType() throws AnalysisException {
@@ -492,8 +525,8 @@ public class BinaryPredicate extends Predicate implements Writable {
             }
         }
 
-        if (isDecimalStringComparison(getChild(0).getType(), getChild(1).getType())) {
-            return getDecimalStringComparisonType(getChild(0).getType(), getChild(1).getType());
+        if (isNumericStringComparison(getChild(0).getType(), getChild(1).getType())) {
+            return getNumericStringComparisonType(getChild(0).getType(), getChild(1).getType());
         }
 
         if ((t1.isDecimalV3Type() && !t2.isStringType() && !t2.isFloatingPointType() && !t2.isVariantType())

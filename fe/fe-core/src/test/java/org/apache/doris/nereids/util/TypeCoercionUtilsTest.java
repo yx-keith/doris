@@ -804,7 +804,8 @@ public class TypeCoercionUtilsTest {
     }
 
     @Test
-    public void testProcessComparisonPredicateDecimalStringAvoidDouble() {
+    public void testProcessComparisonPredicateNumericStringAvoidDouble() {
+        // Test decimal vs string
         EqualTo decimalVarchar = new EqualTo(
                 new SlotReference("decimal_col", DecimalV3Type.createDecimalV3Type(38, 0)),
                 new SlotReference("varchar_col", VarcharType.createVarcharType(64))
@@ -820,6 +821,70 @@ public class TypeCoercionUtilsTest {
         stringDecimalV2 = (EqualTo) TypeCoercionUtils.processComparisonPredicate(stringDecimalV2);
         Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(27, 9), stringDecimalV2.left().getDataType());
         Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(27, 9), stringDecimalV2.right().getDataType());
+
+        // Test bigint vs string - should use decimal instead of double
+        EqualTo bigintString = new EqualTo(
+                new SlotReference("bigint_col", BigIntType.INSTANCE),
+                new SlotReference("string_col", StringType.INSTANCE)
+        );
+        bigintString = (EqualTo) TypeCoercionUtils.processComparisonPredicate(bigintString);
+        Assertions.assertTrue(bigintString.left().getDataType().isDecimalV3Type());
+        Assertions.assertTrue(bigintString.right().getDataType().isDecimalV3Type());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(26, 6), bigintString.left().getDataType());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(26, 6), bigintString.right().getDataType());
+
+        // Test int vs varchar
+        EqualTo intVarchar = new EqualTo(
+                new SlotReference("int_col", IntegerType.INSTANCE),
+                new SlotReference("varchar_col", VarcharType.createVarcharType(20))
+        );
+        intVarchar = (EqualTo) TypeCoercionUtils.processComparisonPredicate(intVarchar);
+        Assertions.assertTrue(intVarchar.left().getDataType().isDecimalV3Type());
+        Assertions.assertTrue(intVarchar.right().getDataType().isDecimalV3Type());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(16, 6), intVarchar.left().getDataType());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(16, 6), intVarchar.right().getDataType());
+
+        // Test largeint vs string
+        EqualTo largeintString = new EqualTo(
+                new SlotReference("largeint_col", LargeIntType.INSTANCE),
+                new SlotReference("string_col", StringType.INSTANCE)
+        );
+        largeintString = (EqualTo) TypeCoercionUtils.processComparisonPredicate(largeintString);
+        Assertions.assertTrue(largeintString.left().getDataType().isDecimalV3Type());
+        Assertions.assertTrue(largeintString.right().getDataType().isDecimalV3Type());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(38, 0), largeintString.left().getDataType());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(38, 0), largeintString.right().getDataType());
+
+        // Test smallint vs string
+        EqualTo smallintString = new EqualTo(
+                new SlotReference("smallint_col", SmallIntType.INSTANCE),
+                new SlotReference("string_col", StringType.INSTANCE)
+        );
+        smallintString = (EqualTo) TypeCoercionUtils.processComparisonPredicate(smallintString);
+        Assertions.assertTrue(smallintString.left().getDataType().isDecimalV3Type());
+        Assertions.assertTrue(smallintString.right().getDataType().isDecimalV3Type());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(11, 6), smallintString.left().getDataType());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(11, 6), smallintString.right().getDataType());
+
+        // Test tinyint vs string
+        EqualTo tinyintString = new EqualTo(
+                new SlotReference("tinyint_col", TinyIntType.INSTANCE),
+                new SlotReference("string_col", StringType.INSTANCE)
+        );
+        tinyintString = (EqualTo) TypeCoercionUtils.processComparisonPredicate(tinyintString);
+        Assertions.assertTrue(tinyintString.left().getDataType().isDecimalV3Type());
+        Assertions.assertTrue(tinyintString.right().getDataType().isDecimalV3Type());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(9, 6), tinyintString.left().getDataType());
+        Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(9, 6), tinyintString.right().getDataType());
+
+        // Test float vs string - should still use double for compatibility
+        EqualTo floatString = new EqualTo(
+                new SlotReference("float_col", FloatType.INSTANCE),
+                new SlotReference("string_col", StringType.INSTANCE)
+        );
+        floatString = (EqualTo) TypeCoercionUtils.processComparisonPredicate(floatString);
+        Assertions.assertEquals(DoubleType.INSTANCE, floatString.left().getDataType());
+        Assertions.assertEquals(DoubleType.INSTANCE, floatString.right().getDataType());
     }
 
     @Test

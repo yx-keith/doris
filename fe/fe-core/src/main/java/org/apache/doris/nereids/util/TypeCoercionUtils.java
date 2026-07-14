@@ -1432,9 +1432,17 @@ public class TypeCoercionUtils {
             }
         }
 
-        if ((leftType.isDecimalLikeType() && rightType.isStringLikeType())
-                || (rightType.isDecimalLikeType() && leftType.isStringLikeType())) {
-            return Optional.of(getDecimalStringComparisonType(leftType, rightType));
+        // numeric + string: use decimal to avoid precision loss
+        // handle integral types (tinyint, smallint, int, bigint, largeint) and decimal types
+        if ((leftType.isNumericType() && rightType.isStringLikeType())
+                || (rightType.isNumericType() && leftType.isStringLikeType())) {
+            // float/double + string still use double for compatibility
+            if (leftType.isFloatType() || leftType.isDoubleType()
+                    || rightType.isFloatType() || rightType.isDoubleType()) {
+                return Optional.of(DoubleType.INSTANCE);
+            }
+            // integral types and decimal types + string use decimal
+            return Optional.of(getNumericStringComparisonType(leftType, rightType));
         }
 
         // numeric
@@ -1494,22 +1502,18 @@ public class TypeCoercionUtils {
             }
             return Optional.of(leftType);
         }
-        // bigint vs string: use decimal to avoid precision loss
-        if ((leftType instanceof BigIntType && rightType.isStringLikeType())
-                || (rightType instanceof BigIntType && leftType.isStringLikeType())) {
-            if (SessionVariable.getEnableDecimal256()) {
-                return Optional.of(DecimalV3Type.createDecimalV3Type(DecimalV3Type.MAX_DECIMAL256_PRECISION,
-                        SessionVariable.getDecimalOverFlowScale()));
-            }
-            return Optional.of(DecimalV3Type.createDecimalV3Type(DecimalV3Type.MAX_DECIMAL128_PRECISION,
-                    SessionVariable.getDecimalOverFlowScale()));
-        }
-
         return Optional.of(DoubleType.INSTANCE);
     }
 
-    private static DecimalV3Type getDecimalStringComparisonType(DataType leftType, DataType rightType) {
-        DecimalV3Type decimalType = DecimalV3Type.forType(leftType.isDecimalLikeType() ? leftType : rightType);
+    /**
+     * Get common decimal type for numeric type vs string type comparison.
+     * This avoids precision loss when comparing numeric types with string types.
+     * For example, bigint vs string should use decimal instead of double to preserve precision.
+     */
+    private static DecimalV3Type getNumericStringComparisonType(DataType leftType, DataType rightType) {
+        DataType numericType = leftType.isNumericType() ? leftType : rightType;
+        DecimalV3Type decimalType = DecimalV3Type.forType(numericType);
+
         int maxPrecision = SessionVariable.getEnableDecimal256()
                 ? DecimalV3Type.MAX_DECIMAL256_PRECISION : DecimalV3Type.MAX_DECIMAL128_PRECISION;
         int integerPart = Math.max(decimalType.getPrecision() - decimalType.getScale(), 0);
