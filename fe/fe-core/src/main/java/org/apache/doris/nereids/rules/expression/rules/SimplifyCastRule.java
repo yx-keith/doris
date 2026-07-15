@@ -129,7 +129,7 @@ public class SimplifyCastRule implements ExpressionPatternRuleFactory {
         }
 
         if (child != cast.child()) {
-            return new Cast(child, cast.getDataType());
+            return new Cast(child, cast.getDataType(), cast.isExplicitType(), cast.isStrictDecimalCast());
         }
         return cast;
     }

@@ -37,6 +37,7 @@ import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.ComparisonPredicate;
 import org.apache.doris.nereids.trees.expressions.CompoundPredicate;
 import org.apache.doris.nereids.trees.expressions.Divide;
+import org.apache.doris.nereids.trees.expressions.EqualPredicate;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.InPredicate;
 import org.apache.doris.nereids.trees.expressions.IntegralDivide;
@@ -458,6 +459,15 @@ public class TypeCoercionUtils {
             checkCanCastTo(input.getDataType(), targetType);
             return unSafeCast(input, targetType);
         }
+    }
+
+    private static Expression castComparisonOperand(
+            Expression input, DataType targetType, boolean strictDecimalCast) {
+        if (strictDecimalCast && input.getDataType().isStringLikeType() && targetType.isDecimalV3Type()) {
+            checkCanCastTo(input.getDataType(), targetType);
+            return new Cast(input, targetType, false, true);
+        }
+        return castIfNotSameType(input, targetType);
     }
 
     public static Expression castUnbound(Expression expression, DataType targetType) {
@@ -1009,8 +1019,9 @@ public class TypeCoercionUtils {
                 throw new AnalysisException("data type " + commonType.get()
                         + " could not used in ComparisonPredicate " + comparisonPredicate.toSql());
             }
-            left = castIfNotSameType(left, commonType.get());
-            right = castIfNotSameType(right, commonType.get());
+            boolean strictDecimalCast = comparisonPredicate instanceof EqualPredicate;
+            left = castComparisonOperand(left, commonType.get(), strictDecimalCast);
+            right = castComparisonOperand(right, commonType.get(), strictDecimalCast);
         }
         return comparisonPredicate.withChildren(left, right);
     }
@@ -1083,7 +1094,7 @@ public class TypeCoercionUtils {
         return optionalCommonType
                 .map(commonType -> {
                     List<Expression> newChildren = fmtInPredicate.children().stream()
-                            .map(e -> TypeCoercionUtils.castIfNotSameType(e, commonType))
+                            .map(e -> TypeCoercionUtils.castComparisonOperand(e, commonType, true))
                             .collect(Collectors.toList());
                     return fmtInPredicate.withChildren(newChildren);
                 })

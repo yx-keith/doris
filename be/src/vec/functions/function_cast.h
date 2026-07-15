@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <atomic>
 #include <boost/iterator/iterator_facade.hpp>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -1502,12 +1503,131 @@ private:
     const char* name;
 };
 
+struct NameStrictCast;
+
 // always from DataTypeString
 template <typename ToDataType, typename Name>
 struct StringParsing {
     using ToFieldType = typename ToDataType::FieldType;
 
     static bool is_all_read(ReadBuffer& in) { return in.eof(); }
+
+    static bool is_lossless_decimal_string(const char* data, size_t size, UInt32 precision,
+                                           UInt32 target_scale) {
+        size_t begin = 0;
+        size_t end = size;
+        while (begin < end && std::isspace(static_cast<unsigned char>(data[begin]))) {
+            ++begin;
+        }
+        while (begin < end && std::isspace(static_cast<unsigned char>(data[end - 1]))) {
+            --end;
+        }
+        if (begin == end) {
+            return false;
+        }
+
+        size_t pos = begin;
+        if (data[pos] == '+' || data[pos] == '-') {
+            ++pos;
+        }
+
+        bool seen_dot = false;
+        bool seen_digit = false;
+        size_t digits_before_dot = 0;
+        size_t digits = 0;
+        size_t first_non_zero = 0;
+        size_t last_non_zero = 0;
+        while (pos < end && data[pos] != 'e' && data[pos] != 'E') {
+            unsigned char ch = static_cast<unsigned char>(data[pos]);
+            if (std::isdigit(ch)) {
+                seen_digit = true;
+                ++digits;
+                if (!seen_dot) {
+                    ++digits_before_dot;
+                }
+                if (ch != '0') {
+                    if (first_non_zero == 0) {
+                        first_non_zero = digits;
+                    }
+                    last_non_zero = digits;
+                }
+            } else if (data[pos] == '.' && !seen_dot) {
+                seen_dot = true;
+            } else {
+                return false;
+            }
+            ++pos;
+        }
+        if (!seen_digit) {
+            return false;
+        }
+
+        int exponent = 0;
+        if (pos < end) {
+            ++pos;
+            bool negative_exponent = false;
+            if (pos < end && (data[pos] == '+' || data[pos] == '-')) {
+                negative_exponent = data[pos] == '-';
+                ++pos;
+            }
+            if (pos == end) {
+                return false;
+            }
+
+            constexpr int kMaxRelevantExponent = 1024;
+            int exponent_magnitude = 0;
+            while (pos < end) {
+                unsigned char ch = static_cast<unsigned char>(data[pos]);
+                if (!std::isdigit(ch)) {
+                    return false;
+                }
+                if (exponent_magnitude <= kMaxRelevantExponent) {
+                    exponent_magnitude = exponent_magnitude * 10 + (ch - '0');
+                    if (exponent_magnitude > kMaxRelevantExponent) {
+                        exponent_magnitude = kMaxRelevantExponent + 1;
+                    }
+                }
+                ++pos;
+            }
+            if (exponent_magnitude > kMaxRelevantExponent) {
+                return first_non_zero == 0;
+            }
+            exponent = negative_exponent ? -exponent_magnitude : exponent_magnitude;
+        }
+
+        // Zero is exactly representable at every decimal precision and scale.
+        if (first_non_zero == 0) {
+            return true;
+        }
+
+        size_t first_non_zero_offset = first_non_zero - 1;
+        constexpr size_t kMaxRelevantDigits = 1024;
+        int base_decimal_point;
+        if (digits_before_dot >= first_non_zero_offset) {
+            size_t difference = digits_before_dot - first_non_zero_offset;
+            if (difference > kMaxRelevantDigits) {
+                return false;
+            }
+            base_decimal_point = static_cast<int>(difference);
+        } else {
+            size_t difference = first_non_zero_offset - digits_before_dot;
+            if (difference > kMaxRelevantDigits) {
+                return false;
+            }
+            base_decimal_point = -static_cast<int>(difference);
+        }
+
+        size_t significant_digits = last_non_zero - first_non_zero + 1;
+        if (significant_digits > precision) {
+            return false;
+        }
+
+        int decimal_point = base_decimal_point + exponent;
+        int required_integer_digits = std::max(decimal_point, 0);
+        int required_scale = std::max(static_cast<int>(significant_digits) - decimal_point, 0);
+        return required_integer_digits <= static_cast<int>(precision - target_scale)
+                && required_scale <= static_cast<int>(target_scale);
+    }
 
     template <typename Additions = void*>
     static Status execute(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
@@ -1557,9 +1677,19 @@ struct StringParsing {
                 ToDataType::check_type_precision((PrecisionScaleArg(additions).precision));
                 StringParser::ParseResult res = try_parse_decimal_impl<ToDataType>(
                         vec_to[i], read_buffer, PrecisionScaleArg(additions));
-                parsed = (res == StringParser::PARSE_SUCCESS ||
-                          res == StringParser::PARSE_OVERFLOW ||
-                          res == StringParser::PARSE_UNDERFLOW);
+                if constexpr (std::is_same_v<Name, NameStrictCast>) {
+                    // ColumnString offsets include the terminating zero.
+                    parsed = (res == StringParser::PARSE_SUCCESS
+                            || res == StringParser::PARSE_UNDERFLOW)
+                            && is_lossless_decimal_string(
+                                    reinterpret_cast<const char*>(&(*chars)[current_offset]), string_size - 1,
+                                    (PrecisionScaleArg(additions).precision),
+                                    (PrecisionScaleArg(additions).scale));
+                } else {
+                    parsed = (res == StringParser::PARSE_SUCCESS
+                            || res == StringParser::PARSE_OVERFLOW
+                            || res == StringParser::PARSE_UNDERFLOW);
+                }
             } else if constexpr (IsDataTypeDateTimeV2<ToDataType>) {
                 const auto* type = assert_cast<const DataTypeDateTimeV2*>(
                         block.get_by_position(result).type.get());
@@ -1601,6 +1731,10 @@ struct ConvertImpl<DataTypeString, DataTypeIPv6, Name> : StringParsing<DataTypeI
 
 struct NameCast {
     static constexpr auto name = "CAST";
+};
+
+struct NameStrictCast {
+    static constexpr auto name = "STRICT_CAST";
 };
 
 template <typename ToDataType, typename Name>
@@ -1701,11 +1835,13 @@ public:
             std::function<Monotonicity(const IDataType&, const Field&, const Field&)>;
 
     FunctionCast(const char* name_, MonotonicityForRange&& monotonicity_for_range_,
-                 const DataTypes& argument_types_, const DataTypePtr& return_type_)
+                 const DataTypes& argument_types_, const DataTypePtr& return_type_,
+                 bool strict_decimal_cast_ = false)
             : name(name_),
               monotonicity_for_range(monotonicity_for_range_),
               argument_types(argument_types_),
-              return_type(return_type_) {}
+              return_type(return_type_),
+              strict_decimal_cast(strict_decimal_cast_) {}
 
     const DataTypes& get_argument_types() const override { return argument_types; }
     const DataTypePtr& get_return_type() const override { return return_type; }
@@ -1733,6 +1869,7 @@ private:
 
     DataTypes argument_types;
     DataTypePtr return_type;
+    bool strict_decimal_cast;
 
     template <typename DataType>
     WrapperType create_wrapper(const DataTypePtr& from_type, const DataType* const,
@@ -1743,7 +1880,11 @@ private:
             check_and_get_data_type<DataTypeString>(from_type.get())) {
             /// In case when converting to Nullable type, we apply different parsing rule,
             /// that will not throw an exception but return NULL in case of malformed input.
-            function = FunctionConvertFromString<DataType, NameCast>::create();
+            if (strict_decimal_cast) {
+                function = FunctionConvertFromString<DataType, NameStrictCast>::create();
+            } else {
+                function = FunctionConvertFromString<DataType, NameCast>::create();
+            }
         } else if (requested_result_is_nullable &&
                    (IsTimeType<DataType> || IsTimeV2Type<DataType>)&&!(
                            check_and_get_data_type<DataTypeDateTime>(from_type.get()) ||
@@ -1793,18 +1934,26 @@ private:
             return create_unsupport_wrapper(from_type->get_name(), to_type->get_name());
         }
 
-        return [type_index, precision, scale](FunctionContext* context, Block& block,
-                                              const ColumnNumbers& arguments, const size_t result,
-                                              size_t input_rows_count) {
+        return [type_index, precision, scale, strict_decimal_cast](FunctionContext* context, Block& block,
+                                                                     const ColumnNumbers& arguments,
+                                                                     const size_t result,
+                                                                     size_t input_rows_count) {
             auto res = call_on_index_and_data_type<ToDataType>(
                     type_index, [&](const auto& types) -> bool {
                         using Types = std::decay_t<decltype(types)>;
                         using LeftDataType = typename Types::LeftType;
                         using RightDataType = typename Types::RightType;
 
-                        auto state = ConvertImpl<LeftDataType, RightDataType, NameCast>::execute(
-                                context, block, arguments, result, input_rows_count,
-                                PrecisionScaleArg {precision, scale});
+                        Status state;
+                        if (strict_decimal_cast) {
+                            state = ConvertImpl<LeftDataType, RightDataType, NameStrictCast>::execute(
+                                    context, block, arguments, result, input_rows_count,
+                                    PrecisionScaleArg {precision, scale});
+                        } else {
+                            state = ConvertImpl<LeftDataType, RightDataType, NameCast>::execute(
+                                    context, block, arguments, result, input_rows_count,
+                                    PrecisionScaleArg {precision, scale});
+                        }
                         if (!state) {
                             throw Exception(state.code(), state.to_string());
                         }
@@ -2543,8 +2692,8 @@ protected:
         for (size_t i = 0; i < arguments.size(); ++i) data_types[i] = arguments[i].type;
 
         auto monotonicity = get_monotonicity_information(arguments.front().type, return_type.get());
-        return std::make_shared<FunctionCast>(name, std::move(monotonicity), data_types,
-                                              return_type);
+        return std::make_shared<FunctionCast>(cast_function_name(), std::move(monotonicity), data_types,
+                                              return_type, is_strict_decimal_cast());
     }
 
     DataTypePtr get_return_type_impl(const ColumnsWithTypeAndName& arguments) const override {
@@ -2577,6 +2726,10 @@ protected:
     bool use_default_implementation_for_low_cardinality_columns() const override { return false; }
 
 private:
+    virtual const char* cast_function_name() const { return name; }
+
+    virtual bool is_strict_decimal_cast() const { return false; }
+
     template <typename DataType>
     static auto monotonicity_for_type(const DataType* const) {
         return FunctionTo<DataType>::Type::Monotonic::get;
@@ -2607,6 +2760,20 @@ private:
         /// other types like Null, FixedString, Array and Tuple have no monotonicity defined
         return {};
     }
+};
+
+class FunctionBuilderStrictCast final : public FunctionBuilderCast {
+public:
+    static constexpr auto name = "STRICT_CAST";
+
+    static FunctionBuilderPtr create() { return std::make_shared<FunctionBuilderStrictCast>(); }
+
+    String get_name() const override { return name; }
+
+private:
+    const char* cast_function_name() const override { return name; }
+
+    bool is_strict_decimal_cast() const override { return true; }
 };
 
 } // namespace doris::vectorized

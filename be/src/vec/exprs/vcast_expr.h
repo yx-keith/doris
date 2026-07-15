@@ -42,7 +42,9 @@ class VCastExpr final : public VExpr {
     ENABLE_FACTORY_CREATOR(VCastExpr);
 
 public:
-    VCastExpr(const TExprNode& node) : VExpr(node) {}
+    VCastExpr(const TExprNode& node)
+            : VExpr(node),
+              _strict_decimal_cast(node.__isset.strict_decimal_cast && node.strict_decimal_cast) {}
     ~VCastExpr() override = default;
     Status execute(VExprContext* context, Block* block, int* result_column_id) override;
     Status prepare(RuntimeState* state, const RowDescriptor& desc, VExprContext* context) override;
@@ -63,6 +65,9 @@ private:
     DataTypePtr _cast_param_data_type;
     ColumnPtr _cast_param;
 
+    bool _strict_decimal_cast;
+
     static const constexpr char* function_name = "CAST";
+    static const constexpr char* strict_function_name = "STRICT_CAST";
 };
 } // namespace doris::vectorized

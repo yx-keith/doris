@@ -394,6 +394,23 @@ public class BinaryPredicate extends Predicate implements Writable {
         }
     }
 
+    private void castBinaryOpWithStrictDecimalString(Type compatibleType) throws AnalysisException {
+        Expr left = getChild(0);
+        Expr right = getChild(1);
+        boolean strictLeft = op.isEquivalence() && left.getType().isStringType()
+                && compatibleType.isDecimalV3();
+        boolean strictRight = op.isEquivalence() && right.getType().isStringType()
+                && compatibleType.isDecimalV3();
+
+        castBinaryOp(compatibleType);
+        if (strictLeft) {
+            setChild(0, new CastExpr(compatibleType, left, true));
+        }
+        if (strictRight) {
+            setChild(1, new CastExpr(compatibleType, right, true));
+        }
+    }
+
     private Type getCmpType() throws AnalysisException {
         if (!getChild(0).isConstantImpl() && getChild(1).isConstantImpl()) {
             getChild(1).compactForLiteral(getChild(0).getType());
@@ -608,7 +625,7 @@ public class BinaryPredicate extends Predicate implements Writable {
 
         Type cmpType = getCmpType();
         // Ignore return value because type is always bool for predicates.
-        castBinaryOp(cmpType);
+        castBinaryOpWithStrictDecimalString(cmpType);
 
         this.opcode = op.getOpcode();
         String opName = op.getName();

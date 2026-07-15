@@ -68,6 +68,9 @@ public class CastExpr extends Expr {
 
     private boolean notFold = false;
 
+    // Only used for implicit numeric-string comparisons. Ordinary SQL CAST keeps its existing behavior.
+    private boolean strictDecimalCast = false;
+
     private static final Map<Pair<Type, Type>, Function.NullableMode> TYPE_NULLABLE_MODE;
 
     static {
@@ -97,12 +100,17 @@ public class CastExpr extends Expr {
     }
 
     public CastExpr(Type targetType, Expr e) {
+        this(targetType, e, false);
+    }
+
+    public CastExpr(Type targetType, Expr e, boolean strictDecimalCast) {
         super();
         Preconditions.checkArgument(targetType.isValid());
         Preconditions.checkNotNull(e);
         type = targetType;
         targetTypeDef = null;
         isImplicit = true;
+        this.strictDecimalCast = strictDecimalCast;
 
         children.add(e);
 
@@ -120,12 +128,20 @@ public class CastExpr extends Expr {
      * Just use for nereids, put analyze() in finalizeImplForNereids
      */
     public CastExpr(Type targetType, Expr e, Void v) {
+        this(targetType, e, v, false);
+    }
+
+    /**
+     * Just use for nereids, put analyze() in finalizeImplForNereids.
+     */
+    public CastExpr(Type targetType, Expr e, Void v, boolean strictDecimalCast) {
         Preconditions.checkArgument(targetType.isValid());
         Preconditions.checkNotNull(e);
         opcode = TExprOpcode.CAST;
         type = targetType;
         targetTypeDef = null;
         isImplicit = true;
+        this.strictDecimalCast = strictDecimalCast;
         children.add(e);
 
         noOp = Type.matchExactType(e.type, type, true);
@@ -185,6 +201,7 @@ public class CastExpr extends Expr {
         targetTypeDef = other.targetTypeDef;
         isImplicit = other.isImplicit;
         noOp = other.noOp;
+        strictDecimalCast = other.strictDecimalCast;
         nullableFromNereids = other.nullableFromNereids;
     }
 
@@ -269,6 +286,9 @@ public class CastExpr extends Expr {
     protected void toThrift(TExprNode msg) {
         msg.node_type = TExprNodeType.CAST_EXPR;
         msg.setOpcode(opcode);
+        if (strictDecimalCast) {
+            msg.setStrictDecimalCast(true);
+        }
         if (type.isNativeType() && getChild(0).getType().isNativeType()) {
             msg.setChildType(getChild(0).getType().getPrimitiveType().toThrift());
         }
@@ -280,6 +300,10 @@ public class CastExpr extends Expr {
 
     public void setImplicit(boolean implicit) {
         isImplicit = implicit;
+    }
+
+    public boolean isStrictDecimalCast() {
+        return strictDecimalCast;
     }
 
     private void createComplexTypeCastFunction() {
@@ -393,7 +417,7 @@ public class CastExpr extends Expr {
             return false;
         }
         CastExpr expr = (CastExpr) obj;
-        return this.opcode == expr.opcode;
+        return this.opcode == expr.opcode && this.strictDecimalCast == expr.strictDecimalCast;
     }
 
     /**
@@ -423,6 +447,10 @@ public class CastExpr extends Expr {
 
     @Override
     public Expr getResultValue(boolean forPushDownPredicatesToView) throws AnalysisException {
+        // The BE validates strict decimal casts against the original string representation.
+        if (strictDecimalCast) {
+            return this;
+        }
         recursiveResetChildrenResult(forPushDownPredicatesToView);
         final Expr value = children.get(0);
         if (!(value instanceof LiteralExpr)) {

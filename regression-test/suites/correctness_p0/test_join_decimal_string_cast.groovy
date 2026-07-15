@@ -20,6 +20,8 @@ suite("test_join_decimal_string_cast") {
     def tableString = "test_join_decimal_string_cast_string"
     def tableBigInt = "test_join_decimal_string_cast_bigint"
     def tableInt = "test_join_decimal_string_cast_int"
+    def maxDecimal = "99999999999999999999999999999999999999"
+    def overflowDecimal = "999999999999999999999999999999999999999"
 
     sql """ drop table if exists ${tableDecimal} """
     sql """ drop table if exists ${tableString} """
@@ -198,7 +200,7 @@ suite("test_join_decimal_string_cast") {
     assertEquals(987654321, nereidsIntResult[1][0])
     assertEquals("987654321", nereidsIntResult[1][1].toString())
 
-    // Test 4: Edge cases - invalid strings, empty strings
+    // Test 4: strict decimal conversion must not round or clamp string join keys
     sql """ truncate table ${tableDecimal} """
     sql """ truncate table ${tableString} """
 
@@ -206,32 +208,49 @@ suite("test_join_decimal_string_cast") {
         insert into ${tableDecimal} values
             (100, 1),
             (200, 2),
-            (300, 3)
+            (300, 3),
+            (${maxDecimal}, 4)
     """
 
     sql """
         insert into ${tableString} values
             ('100', 10),
+            ('100.000', 11),
+            ('100.4', 12),
             ('200', 20),
             ('invalid', 30),
             ('', 40),
-            ('300.5', 50)
+            ('300.5', 50),
+            ('${maxDecimal}', 60),
+            ('${overflowDecimal}', 70)
     """
 
-    sql "set enable_nereids_planner=true"
-    sql "set enable_fallback_to_original_planner=false"
-    def edgeCaseResult = sql """
+    def assertStrictDecimalResult = { result ->
+        // '100.000' is numerically equal to 100. Values requiring rounding or clamping must not join.
+        assertEquals(4, result.size())
+        assertEquals("100", result[0][0].toString())
+        assertEquals("100", result[0][1].toString())
+        assertEquals("100", result[1][0].toString())
+        assertEquals("100.000", result[1][1].toString())
+        assertEquals("200", result[2][0].toString())
+        assertEquals("200", result[2][1].toString())
+        assertEquals(maxDecimal, result[3][0].toString())
+        assertEquals(maxDecimal, result[3][1].toString())
+    }
+
+    def edgeCaseQuery = """
         select cast(d.k as string), s.k, d.v, s.v
         from ${tableDecimal} d
         join ${tableString} s on d.k = s.k
         order by d.v, s.v
     """
-    // Only exact matches should join
-    assertEquals(2, edgeCaseResult.size())
-    assertEquals("100", edgeCaseResult[0][0].toString())
-    assertEquals("100", edgeCaseResult[0][1].toString())
-    assertEquals("200", edgeCaseResult[1][0].toString())
-    assertEquals("200", edgeCaseResult[1][1].toString())
+
+    sql "set enable_nereids_planner=false"
+    assertStrictDecimalResult(sql(edgeCaseQuery))
+
+    sql "set enable_nereids_planner=true"
+    sql "set enable_fallback_to_original_planner=false"
+    assertStrictDecimalResult(sql(edgeCaseQuery))
 
     sql """ drop table if exists ${tableDecimal} """
     sql """ drop table if exists ${tableString} """

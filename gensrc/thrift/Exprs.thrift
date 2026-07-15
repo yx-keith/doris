@@ -268,6 +268,9 @@ struct TExprNode {
   34: optional TIPv4Literal ipv4_literal
   35: optional TIPv6Literal ipv6_literal
   36: optional string label // alias name, a/b in `select xxx as a, count(1) as b`
+  // Only used by implicit numeric-string comparisons. A strict decimal cast rejects
+  // malformed, overflowing and lossy decimal strings instead of rounding or clamping them.
+  37: optional bool strict_decimal_cast
 }
 
 // A flattened representation of a tree of Expr nodes, obtained by depth-first
@@ -279,5 +282,4 @@ struct TExpr {
 struct TExprList {
   1: required list<TExpr> exprs
 }
-
 

@@ -24,5 +24,6 @@
 namespace doris::vectorized {
 void register_function_cast(SimpleFunctionFactory& factory) {
     factory.register_function<FunctionBuilderCast>();
+    factory.register_function<FunctionBuilderStrictCast>();
 }
 } // namespace doris::vectorized

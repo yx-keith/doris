@@ -22,6 +22,7 @@ import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.Divide;
 import org.apache.doris.nereids.trees.expressions.EqualTo;
 import org.apache.doris.nereids.trees.expressions.Expression;
+import org.apache.doris.nereids.trees.expressions.GreaterThan;
 import org.apache.doris.nereids.trees.expressions.InPredicate;
 import org.apache.doris.nereids.trees.expressions.Multiply;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
@@ -813,6 +814,16 @@ public class TypeCoercionUtilsTest {
         decimalVarchar = (EqualTo) TypeCoercionUtils.processComparisonPredicate(decimalVarchar);
         Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(38, 0), decimalVarchar.left().getDataType());
         Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(38, 0), decimalVarchar.right().getDataType());
+        Assertions.assertTrue(decimalVarchar.right() instanceof Cast);
+        Assertions.assertTrue(((Cast) decimalVarchar.right()).isStrictDecimalCast());
+
+        GreaterThan decimalVarcharRange = new GreaterThan(
+                new SlotReference("decimal_col", DecimalV3Type.createDecimalV3Type(38, 0)),
+                new SlotReference("varchar_col", VarcharType.createVarcharType(64))
+        );
+        decimalVarcharRange = (GreaterThan) TypeCoercionUtils.processComparisonPredicate(decimalVarcharRange);
+        Assertions.assertTrue(decimalVarcharRange.right() instanceof Cast);
+        Assertions.assertFalse(((Cast) decimalVarcharRange.right()).isStrictDecimalCast());
 
         EqualTo stringDecimalV2 = new EqualTo(
                 new SlotReference("string_col", StringType.INSTANCE),
@@ -832,6 +843,8 @@ public class TypeCoercionUtilsTest {
         Assertions.assertTrue(bigintString.right().getDataType().isDecimalV3Type());
         Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(26, 6), bigintString.left().getDataType());
         Assertions.assertEquals(DecimalV3Type.createDecimalV3Type(26, 6), bigintString.right().getDataType());
+        Assertions.assertTrue(bigintString.right() instanceof Cast);
+        Assertions.assertTrue(((Cast) bigintString.right()).isStrictDecimalCast());
 
         // Test int vs varchar
         EqualTo intVarchar = new EqualTo(
@@ -885,6 +898,8 @@ public class TypeCoercionUtilsTest {
         floatString = (EqualTo) TypeCoercionUtils.processComparisonPredicate(floatString);
         Assertions.assertEquals(DoubleType.INSTANCE, floatString.left().getDataType());
         Assertions.assertEquals(DoubleType.INSTANCE, floatString.right().getDataType());
+        Assertions.assertTrue(floatString.right() instanceof Cast);
+        Assertions.assertFalse(((Cast) floatString.right()).isStrictDecimalCast());
     }
 
     @Test

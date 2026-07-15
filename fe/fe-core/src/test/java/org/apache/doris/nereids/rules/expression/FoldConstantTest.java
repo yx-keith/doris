@@ -83,6 +83,7 @@ import org.apache.doris.nereids.trees.expressions.literal.TinyIntLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.VarcharLiteral;
 import org.apache.doris.nereids.trees.plans.RelationId;
 import org.apache.doris.nereids.types.DateTimeV2Type;
+import org.apache.doris.nereids.types.DecimalV3Type;
 import org.apache.doris.nereids.types.DoubleType;
 import org.apache.doris.nereids.types.IntegerType;
 import org.apache.doris.nereids.types.TinyIntType;
@@ -216,6 +217,19 @@ class FoldConstantTest extends ExpressionRewriteTestHelper {
         Expression rewritten = executor.rewrite(c, context);
         Literal expected = Literal.of((byte) 1);
         Assertions.assertEquals(rewritten, expected);
+    }
+
+    @Test
+    void testStrictDecimalCastNotFolded() {
+        executor = new ExpressionRuleExecutor(ImmutableList.of(
+                bottomUp(FoldConstantRuleOnFE.VISITOR_INSTANCE)
+        ));
+
+        Cast cast = new Cast(new StringLiteral("100.000"), DecimalV3Type.createDecimalV3Type(38, 0),
+                false, true);
+        Expression rewritten = executor.rewrite(cast, context);
+        Assertions.assertInstanceOf(Cast.class, rewritten);
+        Assertions.assertTrue(((Cast) rewritten).isStrictDecimalCast());
     }
 
     @Test

@@ -36,24 +36,36 @@ public class Cast extends Expression implements UnaryExpression {
     // CAST can be from SQL Query or Type Coercion.
     private final boolean isExplicitType;
 
+    // Only used for implicit numeric-string comparisons.
+    private final boolean strictDecimalCast;
+
     private final DataType targetType;
 
     public Cast(Expression child, DataType targetType) {
-        this(child, targetType, false);
+        this(child, targetType, false, false);
     }
 
     public Cast(Expression child, DataType targetType, boolean isExplicitType) {
-        this(ImmutableList.of(child), targetType, isExplicitType);
+        this(child, targetType, isExplicitType, false);
     }
 
-    private Cast(List<Expression> child, DataType targetType, boolean isExplicitType) {
+    public Cast(Expression child, DataType targetType, boolean isExplicitType, boolean strictDecimalCast) {
+        this(ImmutableList.of(child), targetType, isExplicitType, strictDecimalCast);
+    }
+
+    private Cast(List<Expression> child, DataType targetType, boolean isExplicitType, boolean strictDecimalCast) {
         super(child);
         this.targetType = Objects.requireNonNull(targetType, "targetType can not be null");
         this.isExplicitType = isExplicitType;
+        this.strictDecimalCast = strictDecimalCast;
     }
 
     public boolean isExplicitType() {
         return isExplicitType;
+    }
+
+    public boolean isStrictDecimalCast() {
+        return strictDecimalCast;
     }
 
     @Override
@@ -87,7 +99,7 @@ public class Cast extends Expression implements UnaryExpression {
     @Override
     public Cast withChildren(List<Expression> children) {
         Preconditions.checkArgument(children.size() == 1);
-        return new Cast(children, targetType, isExplicitType);
+        return new Cast(children, targetType, isExplicitType, strictDecimalCast);
     }
 
     @Override
@@ -106,11 +118,12 @@ public class Cast extends Expression implements UnaryExpression {
             return false;
         }
         Cast cast = (Cast) o;
-        return Objects.equals(targetType, cast.targetType);
+        return Objects.equals(targetType, cast.targetType)
+                && strictDecimalCast == cast.strictDecimalCast;
     }
 
     @Override
     public int computeHashCode() {
-        return Objects.hash(super.computeHashCode(), targetType);
+        return Objects.hash(super.computeHashCode(), targetType, strictDecimalCast);
     }
 }

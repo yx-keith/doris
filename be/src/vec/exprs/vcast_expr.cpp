@@ -66,7 +66,7 @@ doris::Status VCastExpr::prepare(doris::RuntimeState* state, const doris::RowDes
     argument_template.emplace_back(nullptr, child->data_type(), child_name);
     argument_template.emplace_back(_cast_param, _cast_param_data_type, _target_data_type_name);
     _function = SimpleFunctionFactory::instance().get_function(
-            function_name, argument_template, _data_type,
+            _strict_decimal_cast ? strict_function_name : function_name, argument_template, _data_type,
             {.enable_decimal256 = state->enable_decimal256()});
 
     if (_function == nullptr) {
